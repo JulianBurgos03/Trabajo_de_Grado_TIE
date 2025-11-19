@@ -290,9 +290,6 @@ Agradecemos también al **Grupo de Investigación en Automática Industrial** po
 
 **Desarrollado con dedicación para avanzar en imagenología médica no invasiva** 💙
 
-![Footer](https://via.placeholder.com/800x100/1e3c72/ffffff?text=Tomograf%C3%ADa+por+Impedancia+El%C3%A9ctrica+-+Universidad+del+Cauca)
-
----
 
 **⭐ Si este proyecto te fue útil, considera darle una estrella!**
 
