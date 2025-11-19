@@ -185,7 +185,7 @@ Si usas este código o metodología, por favor cita:
 <table>
 <tr>
 <td align="center" width="33%">
-<img src="images/Angel-Burgos.png" width="100px;" alt="Ángel Julián Burgos Ayala"/><br>
+<img src="images/Angel-Burgos.jpg" width="100px;" alt="Ángel Julián Burgos Ayala"/><br>
 <b>Ángel Julián Burgos Ayala</b><br>
 <i>Ingeniería en Automática Industrial</i><br>
 Universidad del Cauca<br><br>
@@ -213,7 +213,7 @@ Universidad del Cauca<br><br>
 </td>
 
 <td align="center" width="33%">
-<img src="images/Mosquera.png" width="100px;" alt="Víctor Hugo Mosquera Leyton"/><br>
+<img src="images/Mosquera.jpg" width="100px;" alt="Víctor Hugo Mosquera Leyton"/><br>
 <b>Ph.D. Víctor Hugo Mosquera Leyton</b><br>
 <i>Director del Trabajo</i><br>
 Ciencias de la Electrónica<br>
