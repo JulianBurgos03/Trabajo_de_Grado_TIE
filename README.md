@@ -185,7 +185,6 @@ Si usas este código o metodología, por favor cita:
 <table>
 <tr>
 <td align="center" width="33%">
-<img src="images/Angel-Burgos.jpg" width="100px;" alt="Ángel Julián Burgos Ayala"/><br>
 <b>Ángel Julián Burgos Ayala</b><br>
 <i>Ingeniería en Automática Industrial</i><br>
 Universidad del Cauca<br><br>
@@ -199,7 +198,6 @@ Universidad del Cauca<br><br>
 </td>
 
 <td align="center" width="33%">
-<img src="images/Juan-José.png" width="100px;" alt="Juan José Fernández Pomeo"/><br>
 <b>Juan José Fernández Pomeo</b><br>
 <i>Ingeniería en Automática Industrial</i><br>
 Universidad del Cauca<br><br>
@@ -213,7 +211,6 @@ Universidad del Cauca<br><br>
 </td>
 
 <td align="center" width="33%">
-<img src="images/Mosquera.jpg" width="100px;" alt="Víctor Hugo Mosquera Leyton"/><br>
 <b>Ph.D. Víctor Hugo Mosquera Leyton</b><br>
 <i>Director del Trabajo</i><br>
 Ciencias de la Electrónica<br>
@@ -259,15 +256,6 @@ Calle 5 No. 4-70, Popayán, Cauca, Colombia
 
 ---
 
-## 📄 Licencia
-
-Este proyecto está bajo la Licencia MIT. Consulta el archivo `LICENSE` para más detalles.
-
-**Uso académico:** ✅ Libre con atribución apropiada  
-**Uso comercial:** ⚠️ Contactar a los autores
-
----
-
 ## 🙏 Agradecimientos
 
 Agradecimiento especial al **Ph.D. Víctor Hugo Mosquera Leyton** por su guía y apoyo durante el desarrollo de esta investigación, y a la **Universidad del Cauca** por proporcionar los recursos e instalaciones necesarios para la realización de este trabajo.
@@ -295,7 +283,6 @@ Agradecemos también al **Grupo de Investigación en Automática Industrial** po
 
 *Made with ❤️ for advancing medical imaging technologies*
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![MATLAB](https://img.shields.io/badge/MATLAB-R2023b-orange.svg)](https://www.mathworks.com/)
 [![Python](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/)
 [![TensorFlow](https://img.shields.io/badge/TensorFlow-2.x-orange.svg)](https://www.tensorflow.org/)
