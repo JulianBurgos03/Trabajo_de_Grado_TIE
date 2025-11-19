@@ -8,8 +8,6 @@
 
 ---
 
-![EIT Banner](https://via.placeholder.com/800x200/667eea/ffffff?text=Tomograf%C3%ADa+por+Impedancia+El%C3%A9ctrica)
-
 ### **Comparación entre Métodos de Electrodos Virtuales**
 *Efecto en la Resolución Espacial e Inmunidad al Ruido*
 
@@ -85,9 +83,6 @@ Este trabajo de grado compara **6 métodos diferentes** para generar **Electrodo
 │   ├── main_hybrid_residual_v3.m
 │   └── Metodo de Aumento de Datos.rar
 │
-├── 📂 images/
-│   ├── logo-unicauca.png
-│   └── logo-grupo-automatica.png
 │
 └── 📚 DOCUMENTACIÓN
     └── [Documento completo del trabajo]
@@ -190,7 +185,7 @@ Si usas este código o metodología, por favor cita:
 <table>
 <tr>
 <td align="center" width="33%">
-<img src="https://avatars.githubusercontent.com/u/placeholder?v=4" width="100px;" alt="Ángel Julián Burgos Ayala"/><br>
+<img src="images/Angel-Burgos.png" width="100px;" alt="Ángel Julián Burgos Ayala"/><br>
 <b>Ángel Julián Burgos Ayala</b><br>
 <i>Ingeniería en Automática Industrial</i><br>
 Universidad del Cauca<br><br>
@@ -204,7 +199,7 @@ Universidad del Cauca<br><br>
 </td>
 
 <td align="center" width="33%">
-<img src="https://avatars.githubusercontent.com/u/placeholder?v=4" width="100px;" alt="Juan José Fernández Pomeo"/><br>
+<img src="images/Juan-José.png" width="100px;" alt="Juan José Fernández Pomeo"/><br>
 <b>Juan José Fernández Pomeo</b><br>
 <i>Ingeniería en Automática Industrial</i><br>
 Universidad del Cauca<br><br>
@@ -218,7 +213,7 @@ Universidad del Cauca<br><br>
 </td>
 
 <td align="center" width="33%">
-<img src="https://avatars.githubusercontent.com/u/placeholder?v=4" width="100px;" alt="Víctor Hugo Mosquera Leyton"/><br>
+<img src="images/Mosquera.png" width="100px;" alt="Víctor Hugo Mosquera Leyton"/><br>
 <b>Ph.D. Víctor Hugo Mosquera Leyton</b><br>
 <i>Director del Trabajo</i><br>
 Ciencias de la Electrónica<br>
@@ -258,7 +253,6 @@ Calle 5 No. 4-70, Popayán, Cauca, Colombia
 
 ### 🌐 Redes Académicas
 
-[![GitHub](https://img.shields.io/badge/GitHub-JulianBurgos03-181717?style=for-the-badge&logo=github)](https://github.com/JulianBurgos03)
 [![Universidad](https://img.shields.io/badge/Web-Universidad_del_Cauca-blue?style=for-the-badge)](https://www.unicauca.edu.co)
 
 </div>
