@@ -1,0 +1,324 @@
+function [img, scenario_id] = generar_imagen_conductividad(fmdl, CONFIG)
+% generar_imagen_conductividad - Genera una imagen de EIDORS con phantom aleatorio
+%
+% Sintaxis:
+%   [img, scenario_id] = generar_imagen_conductividad(fmdl, CONFIG)
+%
+% Entradas:
+%   fmdl   - Estructura forward model de EIDORS donde crear la imagen
+%   CONFIG - Struct de configuración con campos requeridos:
+%            - conductividad_fondo: Conductividad del medio de fondo
+%            - conductividad_objeto: Conductividad de las inclusiones
+%
+% Salidas:
+%   img        - Estructura de imagen de EIDORS con phantom incorporado
+%   scenario_id- Índice numérico (1-10) del escenario seleccionado aleatoriamente
+%
+% Descripción:
+%   Esta función es el núcleo del generador de phantoms. Selecciona aleatoriamente
+%   uno de los 10 escenarios predefinidos del catálogo, crea una imagen base
+%   homogénea con la conductividad de fondo, y luego añade sistemáticamente
+%   todas las inclusiones circulares correspondientes al escenario elegido.
+%   
+%   El proceso garantiza:
+%   - Selección verdaderamente aleatoria para distribución uniforme en dataset
+%   - Trazabilidad completa mediante metadatos en la imagen
+%   - Manejo robusto de escenarios homogéneos y con inclusiones
+%   - Preservación de la integridad de la imagen en cada paso
+%
+%   Flujo de trabajo:
+%   1. Obtiene catálogo completo de escenarios disponibles
+%   2. Selecciona un escenario al azar
+%   3. Crea imagen base homogénea con conductividad de fondo
+%   4. Añade metadatos de trazabilidad al escenario
+%   5. Incorpora inclusiones circulares una por una (si aplica)
+%
+% Ejemplo:
+%   fmdl = crear_modelo_fem(8);
+%   CONFIG.conductividad_fondo = 1.0;
+%   CONFIG.conductividad_objeto = 0.3;
+%   [img, id] = generar_imagen_conductividad(fmdl, CONFIG);
+%   fprintf('Phantom generado: Escenario %d (%s)\n', id, img.scenario_name);
+%
+% Ver también: get_scenarios_definition, add_circular_inclusion, mk_image
+
+%% Validación exhaustiva de entradas
+if nargin ~= 2
+   error('generar_imagen_conductividad:WrongNumberOfInputs', ...
+       'La función requiere exactamente 2 argumentos de entrada');
+end
+
+% Validar estructura del forward model
+if ~isstruct(fmdl)
+   error('generar_imagen_conductividad:InvalidFmdlInput', ...
+       'fmdl debe ser una estructura de forward model de EIDORS');
+end
+
+% Verificar campos esenciales del forward model
+required_fmdl_fields = {'nodes', 'elems', 'electrode'};
+for i = 1:length(required_fmdl_fields)
+   if ~isfield(fmdl, required_fmdl_fields{i})
+       error('generar_imagen_conductividad:MissingFmdlField', ...
+           'fmdl debe contener el campo esencial: %s', required_fmdl_fields{i});
+   end
+end
+
+% Validar estructura CONFIG
+if ~isstruct(CONFIG)
+   error('generar_imagen_conductividad:InvalidConfigInput', ...
+       'CONFIG debe ser una estructura');
+end
+
+% Verificar campos obligatorios en CONFIG
+required_config_fields = {'conductividad_fondo', 'conductividad_objeto'};
+for i = 1:length(required_config_fields)
+   field_name = required_config_fields{i};
+   
+   if ~isfield(CONFIG, field_name)
+       error('generar_imagen_conductividad:MissingConfigField', ...
+           'CONFIG debe contener el campo obligatorio: %s', field_name);
+   end
+   
+   % Validar que los valores son numéricos, escalares y finitos
+   field_value = CONFIG.(field_name);
+   if ~isnumeric(field_value) || ~isscalar(field_value) || ~isfinite(field_value)
+       error('generar_imagen_conductividad:InvalidConfigValue', ...
+           'CONFIG.%s debe ser un número escalar finito. Valor recibido: %s', ...
+           field_name, mat2str(field_value));
+   end
+   
+   % Validar que las conductividades son estrictamente positivas
+   if field_value <= 0
+       error('generar_imagen_conductividad:InvalidConductivityValue', ...
+           'CONFIG.%s debe ser un valor estrictamente positivo. Valor recibido: %.6f', ...
+           field_name, field_value);
+   end
+end
+
+%% Paso 1: Obtener catálogo completo de escenarios
+try
+   scenarios = get_scenarios_definition();
+catch ME
+   error('generar_imagen_conductividad:ScenariosDefinitionFailed', ...
+       'Error al obtener la definición de escenarios: %s', ME.message);
+end
+
+% Validar que se obtuvieron escenarios válidos
+if isempty(scenarios) || ~iscell(scenarios)
+   error('generar_imagen_conductividad:NoScenariosAvailable', ...
+       'No se encontraron escenarios válidos en la definición');
+end
+
+n_scenarios = length(scenarios);
+if n_scenarios < 1
+   error('generar_imagen_conductividad:InsufficientScenarios', ...
+       'Debe haber al menos 1 escenario definido. Encontrados: %d', n_scenarios);
+end
+
+%% Paso 2: Selección aleatoria de escenario
+scenario_id = randi(n_scenarios);
+selected_scenario = scenarios{scenario_id};
+
+% Validar escenario seleccionado
+if ~isstruct(selected_scenario)
+   error('generar_imagen_conductividad:InvalidSelectedScenario', ...
+       'El escenario %d no es una estructura válida', scenario_id);
+end
+
+% Verificar campos obligatorios del escenario
+required_scenario_fields = {'name', 'type', 'inclusiones'};
+for i = 1:length(required_scenario_fields)
+   field_name = required_scenario_fields{i};
+   if ~isfield(selected_scenario, field_name)
+       error('generar_imagen_conductividad:MissingScenarioField', ...
+           'El escenario %d no contiene el campo obligatorio: %s', scenario_id, field_name);
+   end
+end
+
+%% Paso 3: Crear imagen base homogénea
+try
+   img = mk_image(fmdl, CONFIG.conductividad_fondo);
+catch ME
+   error('generar_imagen_conductividad:ImageCreationFailed', ...
+       'Error al crear la imagen base homogénea: %s', ME.message);
+end
+
+% Validar imagen base creada
+if ~isstruct(img) || ~isfield(img, 'elem_data') || ~isfield(img, 'fwd_model')
+   error('generar_imagen_conductividad:InvalidImageStructure', ...
+       'La imagen base creada no tiene la estructura esperada de EIDORS');
+end
+
+%% Paso 4: Añadir metadatos esenciales de trazabilidad
+img.scenario_id = scenario_id;
+img.scenario_name = selected_scenario.name;
+img.scenario_type = selected_scenario.type;
+img.conductividad_fondo_usado = CONFIG.conductividad_fondo;
+img.conductividad_objeto_usado = CONFIG.conductividad_objeto;
+img.generation_timestamp = datestr(now);
+
+% Añadir metadatos adicionales del escenario para análisis posterior
+if isfield(selected_scenario, 'num_inclusiones')
+   img.num_inclusiones_esperadas = selected_scenario.num_inclusiones;
+else
+   img.num_inclusiones_esperadas = length(selected_scenario.inclusiones);
+end
+
+%% Paso 5: Añadir inclusiones sistemáticamente (si aplica)
+% Verificar si el escenario requiere inclusiones
+if strcmp(selected_scenario.type, 'homogeneo')
+   % Escenario homogéneo - no hay inclusiones que añadir
+   img.num_inclusiones_aplicadas = 0;
+   img.inclusion_summary = 'Escenario homogéneo - sin inclusiones';
+else
+   % Escenario con inclusiones - procesarlas sistemáticamente
+   inclusiones = selected_scenario.inclusiones;
+   
+   % Validar estructura de inclusiones
+   if ~iscell(inclusiones)
+       error('generar_imagen_conductividad:InvalidInclusionsStructure', ...
+           'Las inclusiones del escenario %d deben ser un cell array', scenario_id);
+   end
+   
+   n_inclusiones = length(inclusiones);
+   inclusiones_exitosas = 0;
+   inclusion_details = cell(n_inclusiones, 1);
+   
+   % Procesar cada inclusión individualmente
+   for i = 1:n_inclusiones
+       try
+           % Obtener parámetros de la inclusión actual
+           inclusion = inclusiones{i};
+           
+           % Validar estructura de la inclusión
+           if ~isstruct(inclusion)
+               warning('generar_imagen_conductividad:InvalidInclusionStructure', ...
+                   'La inclusión %d del escenario %d no es una estructura válida - omitiendo', ...
+                   i, scenario_id);
+               inclusion_details{i} = sprintf('Inclusión %d: ERROR - estructura inválida', i);
+               continue;
+           end
+           
+           % Verificar campos obligatorios de la inclusión
+           required_inclusion_fields = {'x', 'y', 'radius'};
+           skip_inclusion = false;
+           for j = 1:length(required_inclusion_fields)
+               if ~isfield(inclusion, required_inclusion_fields{j})
+                   warning('generar_imagen_conductividad:MissingInclusionField', ...
+                       'La inclusión %d del escenario %d no contiene el campo obligatorio: %s - omitiendo', ...
+                       i, scenario_id, required_inclusion_fields{j});
+                   skip_inclusion = true;
+                   break;
+               end
+           end
+           % --- INICIO DE LA MODIFICACIÓN CON ALEATORIEDAD CONTROLADA ---
+           
+           % 1. Extraer los parámetros BASE del archivo de definición
+           base_x = inclusion.x;
+           base_y = inclusion.y;
+           base_radius = inclusion.radius;
+           
+           % 2. Añadir PEQUEÑAS variaciones aleatorias a la posición y al radio
+           pos_jitter = 0.03; % Desplazamiento máximo
+           radius_jitter_factor = 0.2; % Variación del 20%
+           
+           x_center = base_x + (rand()*2 - 1) * pos_jitter;
+           y_center = base_y + (rand()*2 - 1) * pos_jitter;
+           
+           min_radius = base_radius * (1 - radius_jitter_factor);
+           max_radius = base_radius * (1 + radius_jitter_factor);
+           
+           % Salvaguarda para evitar el warning
+           min_absolute_radius = 0.12; 
+           min_radius = max(min_radius, min_absolute_radius);
+           
+           radius = rand() * (max_radius - min_radius) + min_radius;
+
+           % --- FIN DE LA MODIFICACIÓN ---
+           
+           % Validar que son valores numéricos válidos
+           if ~isnumeric(x_center) || ~isnumeric(y_center) || ~isnumeric(radius) || ...
+              ~isscalar(x_center) || ~isscalar(y_center) || ~isscalar(radius) || ...
+              ~isfinite(x_center) || ~isfinite(y_center) || ~isfinite(radius)
+               warning('generar_imagen_conductividad:InvalidInclusionParameters', ...
+                   'Parámetros numéricos inválidos en inclusión %d del escenario %d - omitiendo', ...
+                   i, scenario_id);
+               inclusion_details{i} = sprintf('Inclusión %d: ERROR - parámetros inválidos', i);
+               continue;
+           end
+           
+           if radius <= 0
+               warning('generar_imagen_conductividad:InvalidInclusionRadius', ...
+                   'Radio inválido (%.6f) en inclusión %d del escenario %d - omitiendo', ...
+                   radius, i, scenario_id);
+               inclusion_details{i} = sprintf('Inclusión %d: ERROR - radio inválido (%.3f)', i, radius);
+               continue;
+           end
+           
+           % Añadir inclusión circular a la imagen usando nuestra función robusta
+           img = add_circular_inclusion(img, x_center, y_center, radius, CONFIG.conductividad_objeto);
+           
+           % Registrar éxito
+           inclusiones_exitosas = inclusiones_exitosas + 1;
+           inclusion_details{i} = sprintf('Inclusión %d: centro=(%.3f,%.3f) radio=%.3f - EXITOSA', ...
+               i, x_center, y_center, radius);
+           
+       catch ME
+           % Manejar errores en inclusiones individuales sin fallar la función completa
+           warning('generar_imagen_conductividad:InclusionAdditionFailed', ...
+               'Error al añadir inclusión %d del escenario %d: %s - continuando con las siguientes', ...
+               i, scenario_id, ME.message);
+           inclusion_details{i} = sprintf('Inclusión %d: ERROR - %s', i, ME.message);
+       end
+   end
+   
+   % Finalizar metadatos sobre inclusiones procesadas
+   img.num_inclusiones_aplicadas = inclusiones_exitosas;
+   img.inclusion_summary = inclusion_details;
+   
+   % Emitir warning si no se pudieron aplicar todas las inclusiones
+   if inclusiones_exitosas < n_inclusiones
+       warning('generar_imagen_conductividad:IncompleteInclusions', ...
+           'Solo se aplicaron %d de %d inclusiones esperadas en el escenario %d (%s)', ...
+           inclusiones_exitosas, n_inclusiones, scenario_id, selected_scenario.name);
+   end
+end
+
+%% Validación final de la imagen generada
+% Verificar integridad de la imagen final
+if any(~isfinite(img.elem_data))
+   error('generar_imagen_conductividad:NonFiniteResults', ...
+       'La imagen generada contiene valores no finitos - corrupción de datos');
+end
+
+if isempty(img.elem_data)
+   error('generar_imagen_conductividad:EmptyImage', ...
+       'La imagen generada no contiene datos de elementos - error crítico');
+end
+
+% Verificar rango de conductividades final
+min_conductivity = min(img.elem_data);
+max_conductivity = max(img.elem_data);
+
+if min_conductivity < 0
+   warning('generar_imagen_conductividad:NegativeConductivity', ...
+       'Se encontraron valores de conductividad negativos en la imagen final (mín: %.6f)', ...
+       min_conductivity);
+end
+
+% Añadir estadísticas finales de la imagen para análisis
+img.final_conductivity_stats = struct();
+img.final_conductivity_stats.min_value = min_conductivity;
+img.final_conductivity_stats.max_value = max_conductivity;
+img.final_conductivity_stats.mean_value = mean(img.elem_data);
+img.final_conductivity_stats.std_value = std(img.elem_data);
+img.final_conductivity_stats.range = max_conductivity - min_conductivity;
+img.final_conductivity_stats.unique_values = length(unique(img.elem_data));
+
+% Calcular fracción de elementos modificados respecto al fondo
+elementos_fondo = sum(abs(img.elem_data - CONFIG.conductividad_fondo) < 1e-12);
+elementos_total = length(img.elem_data);
+img.final_conductivity_stats.fraction_background = elementos_fondo / elementos_total;
+img.final_conductivity_stats.fraction_modified = 1 - img.final_conductivity_stats.fraction_background;
+
+end
