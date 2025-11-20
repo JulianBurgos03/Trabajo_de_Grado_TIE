@@ -167,8 +167,8 @@ run Reconstruccion_de_alpha_dinámico.m
 Si usas este código o metodología, por favor cita:
 
 ```bibtex
-@mastersthesis{BurgosFernandez2025TIE,
-  author = {Burgos Ayala, Ángel Julián and Fernández Pomeo, Juan José},
+@mastersthesis{BurgosFernandezMosquera2025TIE,
+  author = {Burgos Ayala, Ángel Julián; Fernández Pomeo, Juan José and Mosquera Leyton, Víctor Hugo},
   title  = {Comparación entre Métodos de Electrodos Virtuales en TIE},
   school = {Universidad del Cauca},
   year   = {2025},
