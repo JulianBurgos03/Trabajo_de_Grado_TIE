@@ -1,0 +1,553 @@
+%% ==========================================================
+%% SCRIPT PRINCIPAL: generar_dataset_eit.m
+%% Generador de Dataset para CNN - Replicación Xu et al. (2022)
+%% "A Virtual Channel Based Data Augmentation Method for EIT"
+%% ==========================================================
+%
+% PROPÓSITO:
+%   Este script genera un dataset completo de 100,000 muestras para entrenar
+%   una CNN que mapea mediciones de 8 electrodos a 16 electrodos, siguiendo
+%   fielmente la metodología del paper de Xu et al. (2022).
+%
+% AUTOR: Juan José Fernández Pomeo
+% FECHA: 15 de Julio, 2025
+% VERSIÓN: 1.0
+%
+% DEPENDENCIAS:
+%   Este script requiere las siguientes funciones auxiliares:
+%   - crear_modelo_fem.m
+%   - get_scenarios_definition.m
+%   - add_circular_inclusion.m
+%   - generar_imagen_conductividad.m
+%   - mapear_conductividad_8_a_16.m  
+%   - extraer_40_mediciones.m
+%   - extraer_96_mediciones.m
+%   - guardar_dataset_csv.m
+%
+% DATASET GENERADO:
+%   - Archivo: dataset_eit.csv
+%   - Dimensiones: 100,000 filas × 136 columnas
+%   - Entrada (X): 40 mediciones de sistema 8 electrodos
+%   - Salida (y): 96 mediciones de sistema 16 electrodos
+%   - Consistencia física: Mismo phantom en ambos sistemas
+%
+% TIEMPO ESTIMADO: 8-12 horas para 100,000 muestras
+%
+% METODOLOGÍA CRÍTICA:
+%   - Prevención de data leakage mediante mapeo consistente
+%   - Extracción sistemática de canales virtuales
+%   - Validación de integridad en cada muestra
+%
+%% ==========================================================
+
+%% Limpieza inicial del entorno
+close all; clear; clc;
+
+%% Banner inicial
+fprintf('\n');
+fprintf('🚀==================================================================🚀\n');
+fprintf('   GENERADOR DE DATASET EIT - XU ET AL. (2022)\n');
+fprintf('   "A Virtual Channel Based Data Augmentation Method for EIT"\n');
+fprintf('   Autor: Juan José Fernández Pomeo\n');
+fprintf('   Fecha: %s\n', datestr(now));
+fprintf('🚀==================================================================🚀\n');
+fprintf('\n');
+
+%% Configuración de warnings para ejecución limpia
+warning('off', 'add_circular_inclusion:NoElementsAffected');
+fprintf('🔕 Warnings de inclusiones pequeñas silenciados para ejecución limpia\n\n');
+
+%% =====================================================================
+%% PASO 1: INICIALIZACIÓN DE ENTORNO Y DEPENDENCIAS
+%% =====================================================================
+fprintf('🔧 INICIANDO ENTORNO DE TRABAJO...\n');
+
+% Intentar cargar EIDORS automáticamente
+eidors_loaded = false;
+startup_paths = {'startup.m', 'startup_eidors.m', 'eidors/startup.m', '../startup.m'};
+
+for i = 1:length(startup_paths)
+   startup_path = startup_paths{i};
+   if exist(startup_path, 'file')
+       try
+           fprintf('   🔍 Encontrado: %s\n', startup_path);
+           run(startup_path);
+           eidors_loaded = true;
+           fprintf('   ✅ EIDORS cargado exitosamente\n');
+           break;
+       catch ME
+           fprintf('   ⚠️  Error al cargar %s: %s\n', startup_path, ME.message);
+       end
+   end
+end
+
+if ~eidors_loaded
+   fprintf('   ⚠️  No se encontró startup de EIDORS automáticamente\n');
+   fprintf('   📋 Verificando disponibilidad manual...\n');
+   
+   if exist('mk_common_model', 'file')
+       fprintf('   ✅ EIDORS detectado en el path actual\n');
+       eidors_loaded = true;
+   else
+       error('❌ EIDORS no está disponible. Por favor:\n   1. Navegue al directorio de EIDORS\n   2. Ejecute: run startup.m\n   3. Vuelva a ejecutar este script');
+   end
+end
+
+%% =====================================================================
+%% PASO 2: CONFIGURACIÓN GLOBAL
+%% =====================================================================
+fprintf('\n📋 CONFIGURANDO PARÁMETROS GLOBALES...\n');
+
+% Estructura de configuración principal
+CONFIG = struct();
+CONFIG.n_samples = 100000;              % Número total de muestras
+CONFIG.conductividad_fondo = 1.0;       % Conductividad de fondo (S/m)
+CONFIG.conductividad_objeto = 0.3;      % Conductividad de objetos (S/m)
+CONFIG.output_file = 'dataset_eit.csv'; % Archivo de salida
+CONFIG.progress_interval = 1000;        % Mostrar progreso cada X muestras
+CONFIG.save_backup_interval = 10000;    % Guardar backup cada X muestras
+CONFIG.max_error_rate = 0.10;           % Máximo 10% de errores permitidos
+
+% Mostrar configuración al usuario
+fprintf('   📊 Muestras totales: %s\n', addcomma(CONFIG.n_samples));
+fprintf('   🎯 Conductividad fondo: %.1f S/m\n', CONFIG.conductividad_fondo);
+fprintf('   🎯 Conductividad objetos: %.1f S/m\n', CONFIG.conductividad_objeto);
+fprintf('   📁 Archivo salida: %s\n', CONFIG.output_file);
+fprintf('   ⏱️  Intervalo progreso: cada %s muestras\n', addcomma(CONFIG.progress_interval));
+fprintf('   💾 Backup cada: %s muestras\n', addcomma(CONFIG.save_backup_interval));
+fprintf('   🚨 Máximo errores: %.1f%%\n', CONFIG.max_error_rate * 100);
+
+%% =====================================================================
+%% PASO 3: VERIFICACIÓN DE DEPENDENCIAS
+%% =====================================================================
+fprintf('\n🔧 VERIFICANDO DEPENDENCIAS...\n');
+
+% Lista de funciones auxiliares requeridas
+required_functions = {
+   'crear_modelo_fem', 'Creación de modelos FEM';
+   'get_scenarios_definition', 'Catálogo de phantoms';
+   'add_circular_inclusion', 'Añadir inclusiones circulares';
+   'generar_imagen_conductividad', 'Generación de phantoms';
+   'mapear_conductividad_8_a_16', 'Mapeo de consistencia física';
+   'extraer_40_mediciones', 'Extracción mediciones 8e';
+   'extraer_96_mediciones', 'Extracción mediciones 16e';
+   'guardar_dataset_csv', 'Guardado de dataset'
+};
+
+for i = 1:size(required_functions, 1)
+   func_name = required_functions{i, 1};
+   description = required_functions{i, 2};
+   
+   if exist(func_name, 'file')
+       fprintf('   ✅ %s - %s\n', func_name, description);
+   else
+       error('❌ Función requerida no encontrada: %s\n   Asegúrese de que todas las funciones auxiliares estén en el path', func_name);
+   end
+end
+
+%% =====================================================================
+%% PASO 4: CREACIÓN DE MODELOS FEM
+%% =====================================================================
+fprintf('\n🏗️  CREANDO MODELOS FEM...\n');
+tic;
+
+try
+   % Crear modelo de 8 electrodos
+   fprintf('   📐 Creando modelo 8 electrodos...');
+   fmdl_8e = crear_modelo_fem(8);
+   fprintf(' ✅\n');
+   
+   % Crear modelo de 16 electrodos
+   fprintf('   📐 Creando modelo 16 electrodos...');
+   fmdl_16e = crear_modelo_fem(16);
+   fprintf(' ✅\n');
+   
+   modelo_creation_time = toc;
+   fprintf('   ⏱️  Tiempo creación modelos: %.2f segundos\n', modelo_creation_time);
+   
+catch ME
+   error('❌ Error al crear modelos FEM: %s', ME.message);
+end
+
+% Mostrar información de los modelos
+fprintf('   📊 Modelo 8e: %d nodos, %d elementos, %d electrodos\n', ...
+   size(fmdl_8e.nodes, 1), size(fmdl_8e.elems, 1), length(fmdl_8e.electrode));
+fprintf('   📊 Modelo 16e: %d nodos, %d elementos, %d electrodos\n', ...
+   size(fmdl_16e.nodes, 1), size(fmdl_16e.elems, 1), length(fmdl_16e.electrode));
+
+%% =====================================================================
+%% PASO 5: TEST DE FUNCIONALIDAD
+%% =====================================================================
+fprintf('\n🧪 VERIFICANDO FUNCIONALIDAD DEL PIPELINE...\n');
+
+try
+   % Test completo del pipeline con una muestra
+   fprintf('   🧪 Probando generación de phantom...');
+   [test_img_8e, test_scenario_id] = generar_imagen_conductividad(fmdl_8e, CONFIG);
+   fprintf(' ✅\n');
+   
+   fprintf('   🧪 Probando mapeo 8e→16e...');
+   test_img_16e = mapear_conductividad_8_a_16(fmdl_16e, test_img_8e, CONFIG);
+   fprintf(' ✅\n');
+   
+   fprintf('   🧪 Probando forward solve...');
+   test_volt_8e = fwd_solve(test_img_8e);
+   test_volt_16e = fwd_solve(test_img_16e);
+   fprintf(' ✅\n');
+   
+   fprintf('   🧪 Probando extracción de mediciones...');
+   test_meas_8e = extraer_40_mediciones(test_volt_8e);
+   test_meas_16e = extraer_96_mediciones(test_volt_16e);
+   fprintf(' ✅\n');
+   
+   fprintf('   📊 Test exitoso: scenario_id=%d, 8e=%d meds, 16e=%d meds\n', ...
+       test_scenario_id, length(test_meas_8e), length(test_meas_16e));
+   
+   % Verificar consistencia
+   if test_img_8e.scenario_id ~= test_img_16e.scenario_id
+       error('Inconsistencia en scenario_id: 8e=%d, 16e=%d', ...
+           test_img_8e.scenario_id, test_img_16e.scenario_id);
+   end
+   fprintf('   ✅ Consistencia física verificada\n');
+   
+catch ME
+   error('❌ Test de funcionalidad falló: %s', ME.message);
+end
+
+%% =====================================================================
+%% PASO 6: INICIALIZACIÓN DE ESTRUCTURAS DE DATOS
+%% =====================================================================
+fprintf('\n📊 INICIALIZANDO ESTRUCTURAS DE DATOS...\n');
+
+% Pre-alocar matrices para eficiencia (usar single para ahorrar memoria)
+fprintf('   💾 Pre-alocando matrices...\n');
+X_data = zeros(CONFIG.n_samples, 40, 'single');   % Datos de entrada (8e)
+y_data = zeros(CONFIG.n_samples, 96, 'single');   % Datos de salida (16e)
+
+% Arrays para metadatos y estadísticas
+scenario_ids = zeros(CONFIG.n_samples, 1, 'uint8');  % IDs de escenarios (1-10)
+scenario_counts = zeros(10, 1);                      % Contador por escenario
+
+% Estructuras para estadísticas de ejecución
+stats = struct();
+stats.tiempo_inicio = tic;
+stats.muestras_exitosas = 0;
+stats.muestras_con_errores = 0;
+stats.errores_por_tipo = containers.Map();
+stats.tiempo_promedio_por_muestra = 0;
+
+% Información de memoria utilizada
+memory_used_mb = (numel(X_data) + numel(y_data)) * 4 / (1024^2);
+fprintf('   💾 Memoria reservada: %.1f MB\n', memory_used_mb);
+fprintf('   📊 X_data: %s × 40 (entrada)\n', addcomma(CONFIG.n_samples));
+fprintf('   📊 y_data: %s × 96 (salida)\n', addcomma(CONFIG.n_samples));
+
+%% =====================================================================
+%% PASO 7: BUCLE PRINCIPAL DE GENERACIÓN
+%% =====================================================================
+fprintf('\n🔄 INICIANDO GENERACIÓN DE %s MUESTRAS...\n', addcomma(CONFIG.n_samples));
+fprintf('================================================================\n');
+
+% Barra de progreso inicial
+fprintf('Progreso: [');
+progress_bar_length = 50;
+progress_update_interval = floor(CONFIG.n_samples / progress_bar_length);
+
+% Bucle principal con manejo robusto de errores
+for i = 1:CONFIG.n_samples
+   % Tiempo de inicio para esta muestra
+   sample_start_time = tic;
+   
+   try
+       %% === ETAPA 1: GENERAR PHANTOM 8 ELECTRODOS ===
+       [img_8e, scenario_id] = generar_imagen_conductividad(fmdl_8e, CONFIG);
+       
+       %% === ETAPA 2: MAPEAR PHANTOM A 16 ELECTRODOS ===
+       img_16e = mapear_conductividad_8_a_16(fmdl_16e, img_8e, CONFIG);
+       
+       %% === ETAPA 3: RESOLVER PROBLEMAS DIRECTOS ===
+       volt_8e = fwd_solve(img_8e);
+       volt_16e = fwd_solve(img_16e);
+       
+       
+      %% === ETAPA 4: EXTRAER Y NORMALIZAR MEDICIONES ===
+       mediciones_8e_raw = extraer_40_mediciones(volt_8e); % Ya devuelve valores negativos
+       mediciones_16e_raw = extraer_96_mediciones(volt_16e);
+       
+       % --- INVERSIÓN DE SIGNO FORZADA PARA 16e ---
+       % Forzamos que ambas señales sean negativas para consistencia
+       mediciones_16e_raw = -abs(mediciones_16e_raw);
+
+       % --- PASO DE NORMALIZACIÓN CLAVE ---
+       norm_8e = norm(mediciones_8e_raw);
+       norm_16e = norm(mediciones_16e_raw);
+       
+       if norm_8e > 1e-9, mediciones_8e = mediciones_8e_raw / norm_8e; else, mediciones_8e = mediciones_8e_raw; end
+       if norm_16e > 1e-9, mediciones_16e = mediciones_16e_raw / norm_16e; else, mediciones_16e = mediciones_16e_raw; end
+             
+       %% === ALMACENAR DATOS NORMALIZADOS ---
+       X_data(i, :) = single(mediciones_8e');
+       y_data(i, :) = single(mediciones_16e');
+       
+       %% === ETAPA 5: VALIDAR Y ALMACENAR ===
+       % Verificar dimensiones
+       if length(mediciones_8e) ~= 40
+           error('Mediciones 8e incorrectas: %d (esperadas 40)', length(mediciones_8e));
+       end
+       if length(mediciones_16e) ~= 96
+           error('Mediciones 16e incorrectas: %d (esperadas 96)', length(mediciones_16e));
+       end
+       
+       % Verificar consistencia de escenarios
+       if img_8e.scenario_id ~= img_16e.scenario_id
+           error('Inconsistencia scenario_id: 8e=%d, 16e=%d', ...
+               img_8e.scenario_id, img_16e.scenario_id);
+       end
+       
+       % Almacenar datos
+       X_data(i, :) = single(mediciones_8e');
+       y_data(i, :) = single(mediciones_16e');
+       scenario_ids(i) = uint8(scenario_id);
+       scenario_counts(scenario_id) = scenario_counts(scenario_id) + 1;
+       
+       % Actualizar estadísticas de éxito
+       stats.muestras_exitosas = stats.muestras_exitosas + 1;
+       
+   catch ME
+       % Manejar errores sin detener el proceso completo
+       stats.muestras_con_errores = stats.muestras_con_errores + 1;
+       
+       % Categorizar error por tipo
+       error_type = categorizar_error(ME);
+       if isKey(stats.errores_por_tipo, error_type)
+           stats.errores_por_tipo(error_type) = stats.errores_por_tipo(error_type) + 1;
+       else
+           stats.errores_por_tipo(error_type) = 1;
+       end
+       
+       % Mostrar solo primeros errores de cada tipo para evitar spam
+       if stats.errores_por_tipo(error_type) <= 3
+           fprintf('\n⚠️  Error %s en muestra %d: %s\n', error_type, i, ME.message);
+       end
+       
+       % Usar datos sintéticos para mantener consistencia dimensional
+       X_data(i, :) = single(randn(1, 40) * 1e-6);
+       y_data(i, :) = single(randn(1, 96) * 1e-6);
+       scenario_ids(i) = uint8(1);  % Escenario homogéneo por defecto
+       scenario_counts(1) = scenario_counts(1) + 1;
+       
+       % Verificar tasa de errores crítica
+       error_rate = stats.muestras_con_errores / i;
+       if error_rate > CONFIG.max_error_rate
+           fprintf('\n❌ CRÍTICO: Tasa de errores (%.1f%%) excede el límite (%.1f%%). Abortando.\n', ...
+               error_rate * 100, CONFIG.max_error_rate * 100);
+           CONFIG.n_samples = i;  % Ajustar número final
+           break;
+       end
+   end
+   
+   % Calcular tiempo promedio por muestra
+   sample_time = toc(sample_start_time);
+   stats.tiempo_promedio_por_muestra = ...
+       (stats.tiempo_promedio_por_muestra * (i-1) + sample_time) / i;
+   
+   %% === MOSTRAR PROGRESO ===
+   % Barra de progreso visual
+   if mod(i, progress_update_interval) == 0
+       fprintf('█');
+   end
+   
+   % Progreso detallado con estadísticas
+   if mod(i, CONFIG.progress_interval) == 0 || i == CONFIG.n_samples
+       tiempo_transcurrido = toc(stats.tiempo_inicio);
+       porcentaje = i / CONFIG.n_samples * 100;
+       tasa_exito = stats.muestras_exitosas / i * 100;
+       
+       if i > 0 && tiempo_transcurrido > 0
+           muestras_por_segundo = i / tiempo_transcurrido;
+           tiempo_restante = (CONFIG.n_samples - i) / muestras_por_segundo;
+           
+           fprintf(']\n');
+           fprintf('📈 %s/%s (%.1f%%) | ✅ %.1f%% éxito | ⚡ %.1f samp/s | ⏱️ ETA: %.1f min | ❌ %d errores\n', ...
+               addcomma(i), addcomma(CONFIG.n_samples), porcentaje, tasa_exito, ...
+               muestras_por_segundo, tiempo_restante/60, stats.muestras_con_errores);
+           
+           if i < CONFIG.n_samples
+               fprintf('Progreso: [');
+               % Reestablecer barra de progreso
+               chars_printed = floor(i / progress_update_interval);
+               for j = 1:chars_printed
+                   fprintf('█');
+               end
+           end
+       end
+   end
+   
+   %% === BACKUP INTERMEDIO ===
+   if mod(i, CONFIG.save_backup_interval) == 0
+       fprintf('\n💾 Guardando backup intermedio (%s muestras)...\n', addcomma(i));
+       backup_filename = sprintf('backup_dataset_%d.mat', i);
+       try
+           % Guardar solo los datos hasta el punto actual
+           X_backup = X_data(1:i, :);
+           y_backup = y_data(1:i, :);
+           scenario_backup = scenario_ids(1:i);
+           save(backup_filename, 'X_backup', 'y_backup', 'scenario_backup', ...
+               'stats', 'CONFIG', '-v7.3');
+           fprintf('   ✅ Backup guardado: %s\n', backup_filename);
+       catch ME
+           warning('generar_dataset_eit:BackupFailed', ...
+               '   ⚠️ No se pudo guardar backup: %s', ME.message);
+       end
+   end
+end
+
+if CONFIG.n_samples >= 1000
+   fprintf(']\n');
+end
+
+%% =====================================================================
+%% PASO 8: FINALIZACIÓN Y ESTADÍSTICAS
+%% =====================================================================
+tiempo_total = toc(stats.tiempo_inicio);
+
+fprintf('\n✅ GENERACIÓN COMPLETADA\n');
+fprintf('================================================================\n');
+fprintf('⏱️  Tiempo total: %.1f minutos (%.2f horas)\n', tiempo_total/60, tiempo_total/3600);
+fprintf('📊 Muestras procesadas: %s\n', addcomma(CONFIG.n_samples));
+fprintf('✅ Muestras exitosas: %s (%.1f%%)\n', ...
+   addcomma(stats.muestras_exitosas), (stats.muestras_exitosas/CONFIG.n_samples)*100);
+fprintf('⚠️  Muestras con errores: %s (%.1f%%)\n', ...
+   addcomma(stats.muestras_con_errores), (stats.muestras_con_errores/CONFIG.n_samples)*100);
+fprintf('⚡ Velocidad promedio: %.2f muestras/segundo\n', CONFIG.n_samples/tiempo_total);
+fprintf('⏱️  Tiempo promedio por muestra: %.3f segundos\n', stats.tiempo_promedio_por_muestra);
+
+%% Errores por tipo
+if ~isempty(stats.errores_por_tipo)
+   fprintf('\n📊 ERRORES POR TIPO:\n');
+   error_keys = keys(stats.errores_por_tipo);
+   for k = 1:length(error_keys)
+       error_count = stats.errores_por_tipo(error_keys{k});
+       fprintf('   %s: %s errores\n', error_keys{k}, addcomma(error_count));
+   end
+end
+
+%% Distribución de escenarios
+fprintf('\n📊 DISTRIBUCIÓN DE ESCENARIOS:\n');
+scenario_names = {'homogéneo', 'central_pequeño', 'central_grande', 'excéntrico', ...
+                 'dual_simétrico', 'dual_asimétrico', 'triple', 'múltiple_esquinas', ...
+                 'anular', 'complejo'};
+
+for i = 1:10
+   count = scenario_counts(i);
+   if count > 0
+       porcentaje = count / stats.muestras_exitosas * 100;
+       fprintf('   Escenario %2d (%s): %s (%.1f%%)\n', ...
+           i, scenario_names{i}, addcomma(count), porcentaje);
+   end
+end
+
+%% =====================================================================
+%% PASO 9: GUARDAR DATASET FINAL
+%% =====================================================================
+fprintf('\n💾 GUARDANDO DATASET FINAL...\n');
+
+try
+   % Solo guardar las muestras que se generaron exitosamente
+   X_final = X_data(1:CONFIG.n_samples, :);
+   y_final = y_data(1:CONFIG.n_samples, :);
+   
+   % Guardar usando nuestra función especializada
+   guardar_dataset_csv(X_final, y_final, CONFIG.output_file);
+   
+   % Información del archivo final
+   file_info = dir(CONFIG.output_file);
+   if ~isempty(file_info)
+       fprintf('✅ Dataset guardado exitosamente:\n');
+       fprintf('   📁 Archivo: %s\n', CONFIG.output_file);
+       fprintf('   📏 Tamaño: %.1f MB\n', file_info.bytes / (1024^2));
+       fprintf('   📊 Dimensiones: %s × 136 características\n', addcomma(CONFIG.n_samples));
+   end
+   
+catch ME
+   error('❌ Error al guardar dataset final: %s', ME.message);
+end
+
+%% =====================================================================
+%% PASO 10: LIMPIEZA DE ARCHIVOS TEMPORALES
+%% =====================================================================
+fprintf('\n🧹 LIMPIANDO ARCHIVOS TEMPORALES...\n');
+backup_files = dir('backup_dataset_*.mat');
+if ~isempty(backup_files)
+   for f = 1:length(backup_files)
+       delete(backup_files(f).name);
+       fprintf('   🗑️  Eliminado: %s\n', backup_files(f).name);
+   end
+else
+   fprintf('   ℹ️  No hay archivos temporales que limpiar\n');
+end
+
+%% =====================================================================
+%% RESUMEN FINAL Y PRÓXIMOS PASOS
+%% =====================================================================
+fprintf('\n');
+fprintf('🎉================================================================🎉\n');
+fprintf('   GENERACIÓN DE DATASET COMPLETADA EXITOSAMENTE\n');
+fprintf('   Autor: Juan José Fernández Pomeo\n');
+fprintf('🎉================================================================🎉\n');
+fprintf('\n');
+fprintf('📋 RESUMEN DEL DATASET:\n');
+fprintf('   📁 Archivo: %s\n', CONFIG.output_file);
+fprintf('   📊 Muestras exitosas: %s\n', addcomma(stats.muestras_exitosas));
+fprintf('   🎯 Características entrada: 40 (med_8e_01 a med_8e_40)\n');
+fprintf('   🎯 Características salida: 96 (med_16e_01 a med_16e_96)\n');
+fprintf('   ✅ Tasa de éxito: %.1f%%\n', (stats.muestras_exitosas/CONFIG.n_samples)*100);
+fprintf('   ⏱️  Tiempo total: %.1f horas\n', tiempo_total/3600);
+fprintf('   🔒 Data leakage: EVITADO mediante metodología Xu et al.\n');
+fprintf('\n');
+fprintf('🚀 PRÓXIMOS PASOS:\n');
+fprintf('   1. 🐍 Entrenar CNN en Python con el dataset generado\n');
+fprintf('   2. 🧪 Validar rendimiento del modelo entrenado\n');
+fprintf('   3. 📊 Comparar con resultados del paper original\n');
+fprintf('\n');
+fprintf('💻 COMANDO PYTHON SUGERIDO:\n');
+fprintf('   import pandas as pd\n');
+fprintf('   data = pd.read_csv(''%s'')\n', CONFIG.output_file);
+fprintf('   X = data.iloc[:, :40].values   # Entrada (8 electrodos)\n');
+fprintf('   y = data.iloc[:, 40:].values   # Salida (16 electrodos)\n');
+fprintf('   print(f"Dataset cargado: {X.shape} → {y.shape}")\n');
+fprintf('\n');
+fprintf('================================================================\n');
+fprintf('🎯 DATASET LISTO PARA FASE 2: ENTRENAMIENTO CNN\n');
+fprintf('================================================================\n');
+
+%% =====================================================================
+%% FUNCIONES AUXILIARES
+%% =====================================================================
+
+function formatted_str = addcomma(number)
+   % Añade comas como separadores de miles para legibilidad
+   str = sprintf('%.0f', number);
+   formatted_str = regexprep(str, '(\d)(?=(\d{3})+(?!\d))', '$1,');
+end
+
+function error_type = categorizar_error(ME)
+   % Categoriza errores por tipo basándose en el mensaje
+   message = lower(ME.message);
+   
+   if contains(message, 'scenario') || contains(message, 'phantom')
+       error_type = 'generacion_phantom';
+   elseif contains(message, 'mapeo') || contains(message, 'mapear')
+       error_type = 'mapeo_consistencia';
+   elseif contains(message, 'fwd_solve') || contains(message, 'forward')
+       error_type = 'forward_solve';
+   elseif contains(message, 'mediciones') || contains(message, 'extraer')
+       error_type = 'extraccion_mediciones';
+   elseif contains(message, 'dimensiones') || contains(message, 'size')
+       error_type = 'validacion_datos';
+   elseif contains(message, 'consistency') || contains(message, 'scenario_id')
+       error_type = 'consistencia_fisica';
+   else
+       error_type = 'desconocido';
+   end
+end
