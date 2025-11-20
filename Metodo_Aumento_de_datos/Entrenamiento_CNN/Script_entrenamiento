@@ -1,0 +1,1855 @@
+# =====================================================================================
+# SECCIÓN 1: SETUP, CARGA Y EXPLORACIÓN DE DATOS
+# Replicación de Xu et al. (2022) - Virtual Channel Based Data Augmentation for EIT
+# =====================================================================================
+
+print("🚀 INICIANDO FASE 1: SETUP DEL ENTORNO Y EXPLORACIÓN DE DATOS")
+print("=" * 80)
+
+# =====================================================================================
+# BLOQUE 1: IMPORTACIONES DE LIBRERÍAS
+# =====================================================================================
+print("\n📦 Importando librerías necesarias...")
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import tensorflow as tf
+from tensorflow import keras
+from tensorflow.keras import layers
+import os
+import time
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+import warnings
+warnings.filterwarnings('ignore')
+
+print("   ✅ Todas las librerías importadas exitosamente")
+
+# =====================================================================================
+# BLOQUE 2: CONFIGURACIÓN DE REPRODUCIBILIDAD
+# =====================================================================================
+print("\n🎯 Configurando reproducibilidad...")
+
+RANDOM_SEED = 42
+
+# Configurar semillas para reproducibilidad
+np.random.seed(RANDOM_SEED)
+tf.random.set_seed(RANDOM_SEED)
+
+# Configurar TensorFlow para determinismo (opcional pero recomendado)
+os.environ['TF_DETERMINISTIC_OPS'] = '1'
+os.environ['PYTHONHASHSEED'] = str(RANDOM_SEED)
+
+print(f"   ✅ Semilla aleatoria configurada: {RANDOM_SEED}")
+print(f"   ✅ TensorFlow configurado para determinismo")
+
+# =====================================================================================
+# BLOQUE 3: CONFIGURACIÓN DE VISUALIZACIÓN
+# =====================================================================================
+print("\n🎨 Configurando estilo de visualización...")
+
+# Configurar matplotlib y seaborn
+plt.style.use('seaborn-v0_8-whitegrid')
+plt.rcParams['figure.figsize'] = (15, 6)
+plt.rcParams['font.size'] = 12
+plt.rcParams['axes.titlesize'] = 14
+plt.rcParams['axes.labelsize'] = 12
+plt.rcParams['xtick.labelsize'] = 10
+plt.rcParams['ytick.labelsize'] = 10
+plt.rcParams['legend.fontsize'] = 11
+
+# Configurar seaborn
+sns.set_palette("husl")
+sns.set_context("notebook", font_scale=1.1)
+
+print("   ✅ Configuración de visualización completada")
+
+# =====================================================================================
+# BLOQUE 4: CARGA DE DATOS
+# =====================================================================================
+print("\n📊 Cargando dataset...")
+
+# Definir ruta del archivo (ruta completa)
+file_path = r'C:\Users\juanp\OneDrive\Escritorio\TG_EIT\Datasets\dataset_eit_10Phantom.csv'
+
+# Verificar si el archivo existe
+if not os.path.exists(file_path):
+    print(f"   ❌ ERROR: No se encontró el archivo en: {file_path}")
+    
+    # Buscar el archivo en directorios comunes
+    possible_paths = [
+        'dataset_eit.csv',
+        'dataset_eit_10Phantom.csv',
+        r'C:\Users\juanp\OneDrive\Escritorio\TG_EIT\dataset_eit.csv',
+        r'C:\Users\juanp\OneDrive\Escritorio\TG_EIT\EIDORS\eidors\dataset_eit.csv'
+    ]
+    
+    print("   🔍 Buscando en ubicaciones alternativas...")
+    for path in possible_paths:
+        if os.path.exists(path):
+            file_path = path
+            print(f"   ✅ Archivo encontrado en: {file_path}")
+            break
+    else:
+        print("   ❌ No se encontró el archivo en ninguna ubicación")
+        raise FileNotFoundError(f"Dataset no encontrado. Verifique la ruta: {file_path}")
+
+try:
+    # Medir tiempo de carga
+    start_time = time.time()
+    
+    # Cargar dataset con optimización de memoria
+    print(f"   📁 Cargando archivo: {file_path}")
+    data = pd.read_csv(file_path, dtype=np.float32)
+    
+    load_time = time.time() - start_time
+    
+    # Calcular tamaño del archivo
+    file_size_mb = os.path.getsize(file_path) / (1024**2)
+    
+    print(f"   ✅ Dataset cargado exitosamente")
+    print(f"   ⏱️  Tiempo de carga: {load_time:.2f} segundos")
+    print(f"   📏 Tamaño del archivo: {file_size_mb:.1f} MB")
+    
+except Exception as e:
+    print(f"   ❌ ERROR inesperado al cargar el archivo: {e}")
+    raise
+
+# =====================================================================================
+# BLOQUE 5: VERIFICACIÓN Y SEPARACIÓN DE DATOS
+# =====================================================================================
+print("\n🔍 Verificando estructura de datos...")
+
+# Mostrar dimensiones
+print(f"   📊 Dimensiones del DataFrame: {data.shape}")
+print(f"   📈 Memoria utilizada: {data.memory_usage(deep=True).sum() / (1024**2):.1f} MB")
+
+# Verificar columnas programáticamente
+columns_8e = [col for col in data.columns if col.startswith('med_8e_')]
+columns_16e = [col for col in data.columns if col.startswith('med_16e_')]
+
+print(f"   🎯 Columnas de entrada (8e): {len(columns_8e)} encontradas")
+print(f"   🎯 Columnas de salida (16e): {len(columns_16e)} encontradas")
+
+# Validar número de columnas
+assert len(columns_8e) == 40, f"ERROR: Se esperaban 40 columnas de entrada, encontradas {len(columns_8e)}"
+assert len(columns_16e) == 96, f"ERROR: Se esperaban 96 columnas de salida, encontradas {len(columns_16e)}"
+
+print("   ✅ Estructura de columnas verificada correctamente")
+
+# Separar en matrices X e y
+print("\n🔀 Separando datos en matrices de entrada y salida...")
+
+X = data[columns_8e].values.astype(np.float32)
+y = data[columns_16e].values.astype(np.float32)
+
+# =====================================================================================
+# %% BLOQUE DE FILTRADO DE DATOS HOMOGÉNEOS (NUEVO)
+# =====================================================================================
+print("\n🔍 Filtrando datos homogéneos...")
+
+# Un phantom homogéneo tendrá una varianza muy, muy baja en sus mediciones.
+# Vamos a identificar las filas (muestras) donde la desviación estándar
+# de la señal de entrada (X) es casi cero.
+
+# Calcular la desviación estándar para cada muestra en X
+variance_per_sample = np.std(X, axis=1)
+
+# Definir un umbral pequeño para considerar una señal como "plana" (homogénea)
+# Este valor puede necesitar ajuste, pero es un buen punto de partida.
+homogeneity_threshold = 1e-7 
+
+# Crear una máscara booleana para las muestras NO homogéneas
+non_homogeneous_mask = variance_per_sample > homogeneity_threshold
+
+# Aplicar la máscara para filtrar X e y
+X_filtered = X[non_homogeneous_mask]
+y_filtered = y[non_homogeneous_mask]
+
+# Guardar los originales por si acaso, y sobrescribir X e y
+X_original = X
+y_original = y
+X = X_filtered
+y = y_filtered
+
+print(f"   📊 Muestras originales: {X_original.shape[0]:,}")
+print(f"   📊 Muestras homogéneas encontradas y eliminadas: {np.sum(~non_homogeneous_mask):,}")
+print(f"   📊 Muestras restantes (no homogéneas): {X.shape[0]:,}")
+print(f"   ✅ Dataset filtrado. Continuando solo con datos no homogéneos.")
+# =====================================================================================
+
+print(f"   📥 X (entrada): {X.shape} - {X.dtype}")
+print(f"   📤 y (salida): {y.shape} - {y.dtype}")
+
+# =====================================================================================
+# BLOQUE 6: ANÁLISIS EXPLORATORIO DE DATOS (EDA)
+# =====================================================================================
+print("\n🧪 ANÁLISIS EXPLORATORIO DE DATOS")
+print("-" * 50)
+
+# 6.1 Verificación de integridad
+print("\n🔍 Verificando integridad de datos...")
+
+# Buscar valores NaN e Inf
+nan_count_X = np.isnan(X).sum()
+nan_count_y = np.isnan(y).sum()
+inf_count_X = np.isinf(X).sum()
+inf_count_y = np.isinf(y).sum()
+
+print(f"   📊 Valores NaN en X: {nan_count_X:,}")
+print(f"   📊 Valores NaN en y: {nan_count_y:,}")
+print(f"   📊 Valores Inf en X: {inf_count_X:,}")
+print(f"   📊 Valores Inf en y: {inf_count_y:,}")
+
+if nan_count_X + nan_count_y + inf_count_X + inf_count_y == 0:
+   print("   ✅ Datos íntegros: Sin valores NaN o Inf")
+else:
+   print("   ⚠️  Advertencia: Se encontraron valores problemáticos")
+
+# 6.2 Estadísticas descriptivas
+print("\n📈 Estadísticas descriptivas...")
+
+X_stats = {
+   'media': np.mean(X),
+   'std': np.std(X),
+   'min': np.min(X),
+   'max': np.max(X),
+   'rango': np.max(X) - np.min(X)
+}
+
+y_stats = {
+   'media': np.mean(y),
+   'std': np.std(y),
+   'min': np.min(y),
+   'max': np.max(y),
+   'rango': np.max(y) - np.min(y)
+}
+
+print(f"\n   🎯 Estadísticas X (8 electrodos):")
+print(f"      Media: {X_stats['media']:.6e}")
+print(f"      Desv. Est.: {X_stats['std']:.6e}")
+print(f"      Rango: [{X_stats['min']:.6e}, {X_stats['max']:.6e}]")
+
+print(f"\n   🎯 Estadísticas y (16 electrodos):")
+print(f"      Media: {y_stats['media']:.6e}")
+print(f"      Desv. Est.: {y_stats['std']:.6e}")
+print(f"      Rango: [{y_stats['min']:.6e}, {y_stats['max']:.6e}]")
+
+# 6.3 Análisis de correlación inicial
+print("\n🔗 Análisis de correlación inicial...")
+
+# Calcular correlación entre primeros 5 canales
+n_channels_test = 5
+correlations = []
+
+for i in range(n_channels_test):
+   corr = np.corrcoef(X[:, i], y[:, i])[0, 1]
+   correlations.append(corr)
+   print(f"   📊 Correlación canal {i+1}: X[{i}] vs y[{i}] = {corr:.4f}")
+
+mean_correlation = np.mean(correlations)
+print(f"\n   📈 Correlación promedio (primeros 5 canales): {mean_correlation:.4f}")
+
+if mean_correlation > 0.3:
+   print("   ✅ Correlación positiva moderada detectada")
+elif mean_correlation > 0.1:
+   print("   ⚠️  Correlación positiva débil detectada")
+else:
+   print("   ❓ Correlación baja o inexistente")
+
+# =====================================================================================
+# BLOQUE 7: VISUALIZACIÓN EXPLORATORIA
+# =====================================================================================
+print("\n📊 Creando visualización exploratoria...")
+
+# Seleccionar muestra aleatoria para visualización
+np.random.seed(RANDOM_SEED)
+sample_idx = np.random.randint(0, X.shape[0])
+
+print(f"   🎲 Muestra seleccionada: #{sample_idx}")
+
+# Crear figura con subplots
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+
+# Subplot 1: Señal de entrada (8 electrodos)
+ax1.plot(X[sample_idx], 'o-', linewidth=2, markersize=4, alpha=0.8, label='Mediciones 8e')
+ax1.set_title(f'Señal de Entrada (8 Electrodos)\nMuestra #{sample_idx}', fontweight='bold')
+ax1.set_xlabel('Canal de Medición')
+ax1.set_ylabel('Voltaje (V)')
+ax1.grid(True, alpha=0.3)
+ax1.legend()
+
+# Subplot 2: Señal de salida (16 electrodos)
+ax2.plot(y[sample_idx], 's-', linewidth=2, markersize=3, alpha=0.8, label='Mediciones 16e', color='orange')
+ax2.set_title(f'Señal de Salida (16 Electrodos)\nMuestra #{sample_idx}', fontweight='bold')
+ax2.set_xlabel('Canal de Medición')
+ax2.set_ylabel('Voltaje (V)')
+ax2.grid(True, alpha=0.3)
+ax2.legend()
+
+plt.tight_layout()
+plt.show()
+
+# Mostrar estadísticas de la muestra seleccionada
+print(f"\n   📊 Estadísticas de la muestra #{sample_idx}:")
+print(f"      X: media={np.mean(X[sample_idx]):.6e}, std={np.std(X[sample_idx]):.6e}")
+print(f"      y: media={np.mean(y[sample_idx]):.6e}, std={np.std(y[sample_idx]):.6e}")
+
+# =====================================================================================
+# BLOQUE 8: RESUMEN Y VERIFICACIÓN FINAL
+# =====================================================================================
+print("\n📋 RESUMEN DE DATOS CARGADOS:")
+print("-" * 50)
+
+print(f"   📊 Dataset: {X.shape[0]:,} muestras")
+print(f"   🎯 Entrada (X): {X.shape[1]} características (8 electrodos)")
+print(f"   🎯 Salida (y): {y.shape[1]} características (16 electrodos)")
+print(f"   💾 Tipo de datos: {X.dtype}")
+print(f"   🔒 Integridad: {'✅ OK' if nan_count_X + nan_count_y + inf_count_X + inf_count_y == 0 else '⚠️ Revisar'}")
+print(f"   🔗 Correlación inicial: {mean_correlation:.4f}")
+
+# Verificación final del formato esperado por la CNN
+print(f"\n🧠 Formato para CNN:")
+print(f"   📥 Entrada: {X.shape} → {X.shape[1]} características")
+print(f"   📤 Salida: {y.shape} → {y.shape[1]} características")
+
+# =====================================================================================
+# MENSAJE DE FINALIZACIÓN
+# =====================================================================================
+print("\n" + "=" * 80)
+print("✅ FASE 1 COMPLETADA - Datos cargados y explorados. Listos para la preparación.")
+print("🚀 Siguiente paso: División train/test y normalización de datos")
+print("=" * 80)
+# =====================================================================================
+# SECCIÓN 2: PREPARACIÓN DE DATOS (DIVISIÓN, NORMALIZACIÓN Y RESHAPE)
+# =====================================================================================
+
+print("🔧 INICIANDO FASE 2: PREPARACIÓN DE DATOS PARA CNN")
+print("=" * 80)
+
+# =====================================================================================
+# BLOQUE 1: DIVISIÓN DE DATOS (64% TRAIN, 16% VAL, 20% TEST)
+# =====================================================================================
+print("\n🔀 Dividiendo datos en conjuntos de entrenamiento, validación y prueba...")
+
+# Primera división: 80% (train+val) y 20% (test)
+X_temp, X_test, y_temp, y_test = train_test_split(
+   X, y, 
+   test_size=0.20, 
+   random_state=RANDOM_SEED,
+   shuffle=True
+)
+
+# Segunda división: del 80% restante, dividir en 64% train y 16% val
+# 64% / 80% = 0.8, por lo que train_size = 0.8
+X_train, X_val, y_train, y_val = train_test_split(
+   X_temp, y_temp, 
+   train_size=0.8,  # 0.8 * 0.8 = 0.64 del total
+   random_state=RANDOM_SEED,
+   shuffle=True
+)
+
+print("   ✅ División de datos completada")
+print(f"\n   📊 Dimensiones de los conjuntos:")
+print(f"      🎯 Entrenamiento: X_train={X_train.shape}, y_train={y_train.shape}")
+print(f"      🎯 Validación:    X_val={X_val.shape}, y_val={y_val.shape}")
+print(f"      🎯 Prueba:        X_test={X_test.shape}, y_test={y_test.shape}")
+
+# Verificar porcentajes
+total_samples = X.shape[0]
+train_pct = (X_train.shape[0] / total_samples) * 100
+val_pct = (X_val.shape[0] / total_samples) * 100
+test_pct = (X_test.shape[0] / total_samples) * 100
+
+print(f"\n   📈 Porcentajes de división:")
+print(f"      🎯 Entrenamiento: {train_pct:.1f}% ({X_train.shape[0]:,} muestras)")
+print(f"      🎯 Validación:    {val_pct:.1f}% ({X_val.shape[0]:,} muestras)")
+print(f"      🎯 Prueba:        {test_pct:.1f}% ({X_test.shape[0]:,} muestras)")
+
+# =====================================================================================
+# BLOQUE 2: NORMALIZACIÓN DE DATOS (STANDARDSCALER)
+# =====================================================================================
+print("\n🎛️  Aplicando normalización StandardScaler...")
+
+# Crear instancias de StandardScaler
+scaler_X = StandardScaler()
+scaler_y = StandardScaler()
+
+print("   📊 Ajustando scalers con datos de entrenamiento...")
+
+# PASO CRÍTICO: Ajustar scalers SOLO con datos de entrenamiento
+# Esto previene data leakage al no usar información de validación/prueba
+scaler_X.fit(X_train)
+scaler_y.fit(y_train)
+
+print("   ✅ Scalers ajustados exclusivamente con datos de entrenamiento")
+
+# Aplicar transformación a todos los conjuntos
+print("   🔄 Transformando todos los conjuntos de datos...")
+
+# Transformar datos de entrada (X)
+X_train_norm = scaler_X.transform(X_train)
+X_val_norm = scaler_X.transform(X_val)
+X_test_norm = scaler_X.transform(X_test)
+
+# Transformar datos de salida (y)
+y_train_norm = scaler_y.transform(y_train)
+y_val_norm = scaler_y.transform(y_val)
+y_test_norm = scaler_y.transform(y_test)
+
+print("   ✅ Transformación aplicada a todos los conjuntos")
+
+# Verificar normalización
+print(f"\n   📈 Verificación de normalización (conjunto de entrenamiento):")
+print(f"      🎯 X_train_norm - Media: {np.mean(X_train_norm):.6f}, Std: {np.std(X_train_norm):.6f}")
+print(f"      🎯 y_train_norm - Media: {np.mean(y_train_norm):.6f}, Std: {np.std(y_train_norm):.6f}")
+
+# Verificar rangos de datos normalizados
+print(f"\n   📊 Rangos de datos normalizados:")
+print(f"      🎯 X_train_norm: [{np.min(X_train_norm):.3f}, {np.max(X_train_norm):.3f}]")
+print(f"      🎯 y_train_norm: [{np.min(y_train_norm):.3f}, {np.max(y_train_norm):.3f}]")
+
+# =====================================================================================
+# BLOQUE 3: RESHAPE PARA CNN (AÑADIR DIMENSIÓN DE CANAL)
+# =====================================================================================
+print("\n🔄 Reformateando datos de entrada para CNN...")
+
+# Guardar las formas originales para referencia
+original_shapes = {
+   'X_train': X_train_norm.shape,
+   'X_val': X_val_norm.shape,
+   'X_test': X_test_norm.shape
+}
+
+# Reshape: (num_samples, 40) → (num_samples, 40, 1)
+# La CNN espera formato (batch_size, sequence_length, features)
+X_train_reshaped = X_train_norm.reshape(X_train_norm.shape[0], X_train_norm.shape[1], 1)
+X_val_reshaped = X_val_norm.reshape(X_val_norm.shape[0], X_val_norm.shape[1], 1)
+X_test_reshaped = X_test_norm.reshape(X_test_norm.shape[0], X_test_norm.shape[1], 1)
+
+print("   ✅ Reshape completado para compatibilidad con CNN")
+print(f"\n   📊 Nuevas dimensiones (formato CNN):")
+print(f"      🎯 X_train: {original_shapes['X_train']} → {X_train_reshaped.shape}")
+print(f"      🎯 X_val:   {original_shapes['X_val']} → {X_val_reshaped.shape}")
+print(f"      🎯 X_test:  {original_shapes['X_test']} → {X_test_reshaped.shape}")
+
+print(f"\n   💡 Interpretación de dimensiones:")
+print(f"      📐 Dimensión 0: Número de muestras")
+print(f"      📐 Dimensión 1: Secuencia de 40 mediciones (canales de entrada)")
+print(f"      📐 Dimensión 2: 1 característica por canal (voltaje)")
+
+# =====================================================================================
+# BLOQUE 4: VISUALIZACIÓN COMPARATIVA (ANTES Y DESPUÉS DE NORMALIZACIÓN)
+# =====================================================================================
+print("\n📊 Creando visualización comparativa del efecto de normalización...")
+
+# Seleccionar la misma muestra aleatoria que en la celda anterior
+np.random.seed(RANDOM_SEED)
+sample_idx = np.random.randint(0, X_train.shape[0])
+
+print(f"   🎲 Muestra seleccionada para comparación: #{sample_idx}")
+
+# Crear figura con 4 subplots (2x2)
+fig, axes = plt.subplots(2, 2, figsize=(16, 10))
+
+# Fila superior: ANTES de la normalización
+axes[0, 0].plot(X_train[sample_idx], 'o-', linewidth=2, markersize=4, color='blue', alpha=0.8)
+axes[0, 0].set_title('Entrada (8e) - ANTES de Normalización', fontweight='bold', fontsize=12)
+axes[0, 0].set_xlabel('Canal de Medición')
+axes[0, 0].set_ylabel('Voltaje (V)')
+axes[0, 0].grid(True, alpha=0.3)
+axes[0, 0].ticklabel_format(style='scientific', axis='y', scilimits=(0,0))
+
+axes[0, 1].plot(y_train[sample_idx], 's-', linewidth=2, markersize=3, color='orange', alpha=0.8)
+axes[0, 1].set_title('Salida (16e) - ANTES de Normalización', fontweight='bold', fontsize=12)
+axes[0, 1].set_xlabel('Canal de Medición')
+axes[0, 1].set_ylabel('Voltaje (V)')
+axes[0, 1].grid(True, alpha=0.3)
+axes[0, 1].ticklabel_format(style='scientific', axis='y', scilimits=(0,0))
+
+# Fila inferior: DESPUÉS de la normalización
+axes[1, 0].plot(X_train_norm[sample_idx], 'o-', linewidth=2, markersize=4, color='darkblue', alpha=0.8)
+axes[1, 0].set_title('Entrada (8e) - DESPUÉS de Normalización', fontweight='bold', fontsize=12)
+axes[1, 0].set_xlabel('Canal de Medición')
+axes[1, 0].set_ylabel('Voltaje Normalizado')
+axes[1, 0].grid(True, alpha=0.3)
+axes[1, 0].axhline(y=0, color='red', linestyle='--', alpha=0.5, label='Media = 0')
+axes[1, 0].legend()
+
+axes[1, 1].plot(y_train_norm[sample_idx], 's-', linewidth=2, markersize=3, color='darkorange', alpha=0.8)
+axes[1, 1].set_title('Salida (16e) - DESPUÉS de Normalización', fontweight='bold', fontsize=12)
+axes[1, 1].set_xlabel('Canal de Medición')
+axes[1, 1].set_ylabel('Voltaje Normalizado')
+axes[1, 1].grid(True, alpha=0.3)
+axes[1, 1].axhline(y=0, color='red', linestyle='--', alpha=0.5, label='Media = 0')
+axes[1, 1].legend()
+
+plt.suptitle(f'Efecto de Normalización StandardScaler - Muestra #{sample_idx}', 
+            fontsize=16, fontweight='bold', y=0.98)
+plt.tight_layout()
+plt.subplots_adjust(top=0.92)
+plt.show()
+
+# Mostrar estadísticas comparativas de la muestra
+print(f"\n   📊 Estadísticas comparativas de la muestra #{sample_idx}:")
+print(f"      📈 ANTES - X: media={np.mean(X_train[sample_idx]):.6e}, std={np.std(X_train[sample_idx]):.6e}")
+print(f"      📈 DESPUÉS - X: media={np.mean(X_train_norm[sample_idx]):.6f}, std={np.std(X_train_norm[sample_idx]):.6f}")
+print(f"      📈 ANTES - y: media={np.mean(y_train[sample_idx]):.6e}, std={np.std(y_train[sample_idx]):.6e}")
+print(f"      📈 DESPUÉS - y: media={np.mean(y_train_norm[sample_idx]):.6f}, std={np.std(y_train_norm[sample_idx]):.6f}")
+
+# =====================================================================================
+# BLOQUE 5: HISTOGRAMAS DE DISTRIBUCIÓN
+# =====================================================================================
+print("\n📊 Creando histogramas de distribución...")
+
+# Crear figura para histogramas
+fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+
+# Histogramas ANTES de normalización
+axes[0, 0].hist(X_train.flatten(), bins=50, alpha=0.7, color='blue', edgecolor='black')
+axes[0, 0].set_title('Distribución X (8e) - ANTES', fontweight='bold')
+axes[0, 0].set_xlabel('Voltaje (V)')
+axes[0, 0].set_ylabel('Frecuencia')
+axes[0, 0].ticklabel_format(style='scientific', axis='x', scilimits=(0,0))
+
+axes[0, 1].hist(y_train.flatten(), bins=50, alpha=0.7, color='orange', edgecolor='black')
+axes[0, 1].set_title('Distribución y (16e) - ANTES', fontweight='bold')
+axes[0, 1].set_xlabel('Voltaje (V)')
+axes[0, 1].set_ylabel('Frecuencia')
+axes[0, 1].ticklabel_format(style='scientific', axis='x', scilimits=(0,0))
+
+# Histogramas DESPUÉS de normalización
+axes[1, 0].hist(X_train_norm.flatten(), bins=50, alpha=0.7, color='darkblue', edgecolor='black')
+axes[1, 0].set_title('Distribución X (8e) - DESPUÉS', fontweight='bold')
+axes[1, 0].set_xlabel('Voltaje Normalizado')
+axes[1, 0].set_ylabel('Frecuencia')
+axes[1, 0].axvline(x=0, color='red', linestyle='--', alpha=0.8, label='Media = 0')
+axes[1, 0].legend()
+
+axes[1, 1].hist(y_train_norm.flatten(), bins=50, alpha=0.7, color='darkorange', edgecolor='black')
+axes[1, 1].set_title('Distribución y (16e) - DESPUÉS', fontweight='bold')
+axes[1, 1].set_xlabel('Voltaje Normalizado')
+axes[1, 1].set_ylabel('Frecuencia')
+axes[1, 1].axvline(x=0, color='red', linestyle='--', alpha=0.8, label='Media = 0')
+axes[1, 1].legend()
+
+plt.suptitle('Distribuciones Antes y Después de Normalización', 
+            fontsize=16, fontweight='bold', y=0.98)
+plt.tight_layout()
+plt.subplots_adjust(top=0.92)
+plt.show()
+
+# =====================================================================================
+# BLOQUE 6: VERIFICACIÓN FINAL Y RESUMEN
+# =====================================================================================
+print("\n🔍 VERIFICACIÓN FINAL DE PREPARACIÓN DE DATOS:")
+print("-" * 60)
+
+# Verificar integridad después de todas las transformaciones
+total_samples_check = X_train_reshaped.shape[0] + X_val_reshaped.shape[0] + X_test_reshaped.shape[0]
+integrity_check = total_samples_check == X.shape[0]
+
+print(f"   ✅ Integridad de datos: {'VERIFICADA' if integrity_check else 'ERROR'}")
+print(f"   📊 Muestras originales: {X.shape[0]:,}")
+print(f"   📊 Muestras después de división: {total_samples_check:,}")
+
+# Verificar normalización
+norm_check_X = abs(np.mean(X_train_norm)) < 1e-10 and abs(np.std(X_train_norm) - 1.0) < 1e-2
+norm_check_y = abs(np.mean(y_train_norm)) < 1e-10 and abs(np.std(y_train_norm) - 1.0) < 1e-2
+
+print(f"   ✅ Normalización X: {'CORRECTA' if norm_check_X else 'REVISAR'}")
+print(f"   ✅ Normalización y: {'CORRECTA' if norm_check_y else 'REVISAR'}")
+
+# Verificar formato CNN
+cnn_format_check = (len(X_train_reshaped.shape) == 3 and 
+                  X_train_reshaped.shape[1] == 40 and 
+                  X_train_reshaped.shape[2] == 1)
+
+print(f"   ✅ Formato CNN: {'CORRECTO' if cnn_format_check else 'ERROR'}")
+
+print(f"\n📋 RESUMEN FINAL DE PREPARACIÓN:")
+print(f"   🎯 División de datos: ✅ 64% Train, 16% Val, 20% Test")
+print(f"   🎯 Normalización: ✅ StandardScaler ajustado solo con train")
+print(f"   🎯 Reshape para CNN: ✅ Formato (samples, 40, 1)")
+print(f"   🎯 Prevención data leakage: ✅ Scalers entrenados solo con train")
+
+# Información para siguientes celdas
+print(f"\n🧠 VARIABLES LISTAS PARA CNN:")
+print(f"   📥 Entrada:")
+print(f"      • X_train_reshaped: {X_train_reshaped.shape}")
+print(f"      • X_val_reshaped: {X_val_reshaped.shape}")
+print(f"      • X_test_reshaped: {X_test_reshaped.shape}")
+print(f"   📤 Salida:")
+print(f"      • y_train_norm: {y_train_norm.shape}")
+print(f"      • y_val_norm: {y_val_norm.shape}")
+print(f"      • y_test_norm: {y_test_norm.shape}")
+
+print(f"\n🔧 SCALERS GUARDADOS:")
+print(f"   • scaler_X: Para desnormalizar predicciones de entrada")
+print(f"   • scaler_y: Para desnormalizar predicciones de salida")
+
+# =====================================================================================
+# MENSAJE DE FINALIZACIÓN
+# =====================================================================================
+print("\n" + "=" * 80)
+print("✅ FASE 2 COMPLETADA - Datos preparados y listos para entrenamiento de CNN")
+print("🚀 Siguiente paso: Diseño y construcción de la arquitectura CNN")
+print("=" * 80)
+# =====================================================================================
+# SECCIÓN 3: CONSTRUCCIÓN Y COMPILACIÓN DEL MODELO CNN
+# Implementación de la arquitectura Xu et al. (2022)
+# =====================================================================================
+
+print("🧠 INICIANDO FASE 3: CONSTRUCCIÓN DE LA ARQUITECTURA CNN")
+print("=" * 80)
+'''
+# =====================================================================================
+# BLOQUE 1: DEFINICIÓN DE LA ARQUITECTURA XU ET AL.
+# =====================================================================================
+print("\n🏗️  Definiendo arquitectura CNN basada en Xu et al. (2022)...")
+
+def build_final_cnn(input_shape=(40, 1)):
+    """
+    Construye una versión MEJORADA y más potente de la arquitectura CNN,
+    basada en los principios de Xu et al. (2022), pero con mayor capacidad
+    para superar el límite de rendimiento observado (R² ≈ 0.75).
+
+    El objetivo de los cambios es permitir al modelo aprender relaciones más
+    complejas y sutiles en la transformación de 40 a 96 mediciones.
+
+    Cambios Clave vs. Original:
+    - Mayor número de filtros en capas convolucionales (32 -> 64 y 128).
+    - Mayor número de neuronas en capas densas (256 -> 512).
+    - Se añade Dropout para combatir el posible sobreajuste de un modelo más grande.
+    - Se estandariza el tamaño del kernel convolucional a 3.
+
+    Args:
+        input_shape (tuple): La forma de los datos de entrada, que debe ser (40, 1).
+
+    Returns:
+        tensorflow.keras.Model: El modelo CNN de Keras, listo para ser compilado.
+    
+    print(f"   📐 Construyendo arquitectura MEJORADA con input_shape: {input_shape}")
+
+    # --- Capa de Entrada ---
+    # Define el punto de entrada al modelo. La forma (None, 40, 1) significa que
+    # puede aceptar cualquier número de muestras (None), cada una siendo una
+    # secuencia de 40 pasos de tiempo (mediciones), con 1 característica por paso.
+    inputs = keras.Input(shape=input_shape, name='input_measurements_8e')
+
+    # --- PRIMER BLOQUE CONVOLUCIONAL (Extracción de características de bajo nivel) ---
+    # La primera capa Conv1D busca patrones locales simples en la señal de entrada.
+    # CAMBIO: Aumentamos los filtros de 32 a 64 para permitirle encontrar una
+    # variedad más amplia de patrones iniciales (picos, valles, pendientes).
+    x = layers.Conv1D(
+        filters=64,
+        kernel_size=3,
+        activation='relu',
+        padding='same',  # 'same' ayuda a no perder información en los bordes
+        name='conv1d_1'
+    )(inputs)
+    x = layers.MaxPooling1D(pool_size=2, name='maxpool1d_1')(x)
+
+    # --- SEGUNDO BLOQUE CONVOLUCIONAL (Extracción de características de alto nivel) ---
+    # Esta capa opera sobre las características del primer bloque para encontrar patrones
+    # más complejos y abstractos.
+    # CAMBIO: Aumentamos los filtros a 128 para darle aún más capacidad de representación.
+    # El tamaño del kernel se mantiene en 3, una práctica estándar.
+    x = layers.Conv1D(
+        filters=128,
+        kernel_size=3,
+        activation='relu',
+        padding='same',
+        name='conv1d_2'
+    )(x)
+    x = layers.MaxPooling1D(pool_size=2, name='maxpool1d_2')(x)
+
+    # --- Capa de Aplanamiento ---
+    # Prepara los datos para las capas densas, convirtiendo los mapas de características
+    # 2D (secuencia x filtros) en un único vector largo.
+    x = layers.Flatten(name='flatten')(x)
+
+    # --- BLOQUE DENSO (Regresión y Mapeo No Lineal) ---
+    # Aquí es donde ocurre la mayor parte del "pensamiento" del modelo.
+    # CAMBIO: Aumentamos las neuronas de 256 a 512 para darle al modelo un
+    # "cerebro" más grande, capaz de modelar una función de mapeo más compleja.
+    x = layers.Dense(
+        units=512,
+        activation='relu',
+        kernel_regularizer=keras.regularizers.l2(0.001), # Mantenemos la regularización
+        name='dense_1'
+    )(x)
+    
+    # MEJORA: Añadimos una capa de Dropout. Al ser un modelo más grande, es más
+    # propenso al sobreajuste. Dropout "apaga" aleatoriamente un 25% de las neuronas
+    # durante el entrenamiento, forzando al modelo a aprender de forma más robusta.
+    x = layers.Dropout(0.25, name='dropout_1')(x)
+    
+    # Segunda capa densa para refinar aún más la transformación.
+    x = layers.Dense(
+        units=512,
+        activation='relu',
+        kernel_regularizer=keras.regularizers.l2(0.001),
+        name='dense_2'
+    )(x)
+
+    # MEJORA: Otra capa de Dropout.
+    x = layers.Dropout(0.25, name='dropout_2')(x)
+
+    # --- Capa de Salida ---
+    # La capa final proyecta la representación interna de 512 dimensiones al
+    # espacio de salida de 96 dimensiones. La activación 'linear' es crucial
+    # porque estamos prediciendo valores continuos (regresión).
+    outputs = layers.Dense(
+        units=96,
+        activation='linear',
+        name='output_measurements_16e'
+    )(x)
+
+    # --- Construcción Final del Modelo ---
+    # Ensambla todas las capas en un objeto Modelo de Keras.
+    model = keras.Model(
+        inputs=inputs,
+        outputs=outputs,
+        name='Xu_et_al_CNN_Mejorado'
+    )
+    
+    print("   ✅ Arquitectura MEJORADA construida exitosamente")
+    return model
+    '''
+# =====================================================================================
+# %% REEMPLAZA TU FUNCIÓN DE ARQUITECTURA CON ESTA
+# =====================================================================================
+
+def build_final_cnn(input_shape=(40, 1)):
+    """
+    Construye la arquitectura CNN final y más robusta para el experimento.
+    Esta versión incorpora BatchNormalization para estabilizar el entrenamiento
+    y prevenir el colapso del modelo.
+
+    Cambios Clave:
+    - Mantiene la mayor capacidad (filtros/neuronas) de la versión "mejorada".
+    - Añade BatchNormalization después de cada capa Conv1D y Dense.
+    - Mantiene Dropout para regularización.
+    """
+    
+    print(f"   📐 Construyendo arquitectura FINAL con input_shape: {input_shape}")
+
+    inputs = keras.Input(shape=input_shape, name='input_measurements_8e')
+
+    # --- PRIMER BLOQUE CONVOLUCIONAL ---
+    x = layers.Conv1D(filters=64, kernel_size=3, padding='same', name='conv1d_1')(inputs)
+    x = layers.BatchNormalization(name='batchnorm_1')(x)
+    x = layers.Activation('relu', name='relu_1')(x)
+    x = layers.MaxPooling1D(pool_size=2, name='maxpool1d_1')(x)
+
+    # --- SEGUNDO BLOQUE CONVOLUCIONAL ---
+    x = layers.Conv1D(filters=128, kernel_size=3, padding='same', name='conv1d_2')(x)
+    x = layers.BatchNormalization(name='batchnorm_2')(x)
+    x = layers.Activation('relu', name='relu_2')(x)
+    x = layers.MaxPooling1D(pool_size=2, name='maxpool1d_2')(x)
+
+    # --- CAPA DE APLANAMIENTO ---
+    x = layers.Flatten(name='flatten')(x)
+
+    # --- PRIMER BLOQUE DENSO ---
+    x = layers.Dense(units=512, kernel_regularizer=keras.regularizers.l2(0.001), name='dense_1')(x)
+    x = layers.BatchNormalization(name='batchnorm_3')(x)
+    x = layers.Activation('relu', name='relu_3')(x)
+    x = layers.Dropout(0.3, name='dropout_1')(x) # Aumentar un poco el dropout
+
+    # --- SEGUNDO BLOQUE DENSO ---
+    x = layers.Dense(units=512, kernel_regularizer=keras.regularizers.l2(0.001), name='dense_2')(x)
+    x = layers.BatchNormalization(name='batchnorm_4')(x)
+    x = layers.Activation('relu', name='relu_4')(x)
+    x = layers.Dropout(0.3, name='dropout_2')(x)
+
+    # --- CAPA DE SALIDA ---
+    outputs = layers.Dense(units=96, activation='linear', name='output_measurements_16e')(x)
+
+    model = keras.Model(inputs=inputs, outputs=outputs, name='Final_Robust_CNN')
+    
+    print("   ✅ Arquitectura FINAL construida exitosamente")
+    return model
+
+# =====================================================================================
+# BLOQUE 2: CREACIÓN Y RESUMEN DEL MODELO
+# =====================================================================================
+print("\n🔧 Creando instancia del modelo...")
+
+# Crear el modelo
+model = build_final_cnn(input_shape=(40, 1))
+
+print("   ✅ Modelo creado exitosamente")
+
+# Mostrar resumen detallado de la arquitectura
+print("\n📋 RESUMEN DETALLADO DE LA ARQUITECTURA:")
+print("-" * 80)
+model.summary()
+
+# Contar parámetros
+total_params = model.count_params()
+trainable_params = sum([tf.keras.backend.count_params(w) for w in model.trainable_weights])
+non_trainable_params = total_params - trainable_params
+
+print(f"\n📊 ANÁLISIS DE PARÁMETROS:")
+print(f"   🎯 Parámetros totales: {total_params:,}")
+print(f"   🎯 Parámetros entrenables: {trainable_params:,}")
+print(f"   🎯 Parámetros no entrenables: {non_trainable_params:,}")
+
+# Calcular tamaño aproximado del modelo
+model_size_mb = (total_params * 4) / (1024**2)  # 4 bytes por parámetro float32
+print(f"   💾 Tamaño estimado del modelo: {model_size_mb:.2f} MB")
+
+# =====================================================================================
+# BLOQUE 3: CONFIGURACIÓN DE CALLBACKS
+# =====================================================================================
+print("\n⚙️  Configurando callbacks para entrenamiento robusto...")
+
+# Definir la ruta de guardado una sola vez (SIN la coma al final)
+output_dir = r'C:\Users\juanp\TG_EIT\notebooks\modelo_10_phantoms'
+
+# Asegurarse de que el directorio exista
+# Esta lógica debe estar fuera de la definición de la variable
+if not os.path.exists(output_dir):
+    os.makedirs(output_dir)
+    print(f"   📂 Directorio creado: {output_dir}")
+
+# 1. ReduceLROnPlateau
+reduce_lr = keras.callbacks.ReduceLROnPlateau(
+   monitor='val_loss',
+   factor=0.1,
+   patience=10,
+   min_lr=1e-7,
+   verbose=1,
+   mode='min'
+)
+
+# 2. EarlyStopping
+early_stopping = keras.callbacks.EarlyStopping(
+   monitor='val_loss',
+   patience=25,
+   restore_best_weights=True,
+   verbose=1,
+   mode='min'
+)
+
+# 3. ModelCheckpoint - Guarda el mejor modelo en la ruta correcta
+model_checkpoint = keras.callbacks.ModelCheckpoint(
+   filepath=os.path.join(output_dir, 'modelo_cnn_best.keras'), # Ahora funcionará
+   monitor='val_loss',
+   save_best_only=True,
+   save_weights_only=False,
+   mode='min',
+   verbose=1
+)
+
+# Agrupar callbacks
+callbacks = [reduce_lr, early_stopping, model_checkpoint]
+
+print("   ✅ Callbacks configurados:")
+print(f"      💾 Ruta de guardado del mejor modelo: {os.path.join(output_dir, 'modelo_cnn_best.keras')}")
+
+print("   ✅ Callbacks configurados:")
+print("      📉 ReduceLROnPlateau: factor=0.1, patience=10")
+print("      ⏹️  EarlyStopping: patience=25, restore_best_weights=True")
+print("      💾 ModelCheckpoint: 'modelo_cnn_best.keras', save_best_only=True")
+
+# =====================================================================================
+# BLOQUE 4: COMPILACIÓN DEL MODELO
+# =====================================================================================
+'''
+print("\n🔧 Compilando modelo con optimizador y métricas...")
+
+# Configurar optimizador
+optimizer = keras.optimizers.RMSprop(
+   learning_rate=0.001,
+   rho=0.9,
+   momentum=0.0,
+   epsilon=1e-07,
+   centered=False,
+   name='RMSprop'
+)
+
+# Compilar el modelo
+model.compile(
+   optimizer=optimizer,
+   loss='mean_squared_error',
+   metrics=['mean_absolute_error']
+)
+
+print("   ✅ Modelo compilado exitosamente")
+print(f"   🎯 Optimizador: RMSprop (lr=0.01)")
+print(f"   🎯 Función de pérdida: Mean Squared Error")
+print(f"   🎯 Métricas: Mean Absolute Error")
+'''
+print("\n🔧 Compilando modelo con optimizador y métricas...")
+
+# CAMBIO 1: Usar Adam con learning rate más bajo
+optimizer = keras.optimizers.Adam(learning_rate=0.001)
+
+# Compilar el modelo
+model.compile(
+   optimizer=optimizer,
+   loss='mean_absolute_error', # CAMBIO 2: Usar MAE como función de pérdida
+   metrics=['mean_squared_error'] # Opcional: seguir viendo MSE en las métricas
+)
+
+print("   ✅ Modelo compilado exitosamente")
+print(f"   🎯 Optimizador: Adam (lr=0.001)")
+print(f"   🎯 Función de pérdida: Mean Absolute Error (MAE)")
+print(f"   🎯 Métricas: Mean Squared Error (MSE)")
+
+# =====================================================================================
+# BLOQUE 5: VISUALIZACIÓN DE LA ARQUITECTURA
+# =====================================================================================
+print("\n📊 Creando visualización de la arquitectura...")
+
+try:
+   # Intentar crear diagrama del modelo (requiere graphviz)
+   keras.utils.plot_model(
+       model,
+       to_file='arquitectura_cnn.png',
+       show_shapes=True,
+       show_layer_names=True,
+       rankdir='TB',
+       expand_nested=False,
+       dpi=96
+   )
+   print("   ✅ Diagrama de arquitectura guardado como 'arquitectura_cnn.png'")
+except Exception as e:
+   print(f"   ⚠️  No se pudo crear diagrama visual: {e}")
+   print("      💡 Instale graphviz para visualización: pip install graphviz")
+
+# =====================================================================================
+# BLOQUE 6: VERIFICACIÓN DE COMPATIBILIDAD CON DATOS
+# =====================================================================================
+print("\n🧪 Verificando compatibilidad modelo-datos...")
+
+# Verificar que el modelo puede procesar nuestros datos
+try:
+   # Tomar una muestra pequeña para prueba
+   test_batch = X_train_reshaped[:5]  # 5 muestras de ejemplo
+   
+   # Hacer predicción de prueba
+   test_prediction = model.predict(test_batch, verbose=0)
+   
+   print("   ✅ Test de compatibilidad exitoso")
+   print(f"      📥 Entrada de prueba: {test_batch.shape}")
+   print(f"      📤 Salida de prueba: {test_prediction.shape}")
+   
+   # Verificar dimensiones
+   expected_output_shape = (5, 96)
+   if test_prediction.shape == expected_output_shape:
+       print(f"      ✅ Dimensiones de salida correctas: {test_prediction.shape}")
+   else:
+       print(f"      ❌ ERROR en dimensiones: esperado {expected_output_shape}, obtenido {test_prediction.shape}")
+   
+except Exception as e:
+   print(f"   ❌ ERROR en test de compatibilidad: {e}")
+
+# =====================================================================================
+# BLOQUE 7: CONFIGURACIÓN DE ENTRENAMIENTO
+# =====================================================================================
+print("\n⚙️  Configuración final para entrenamiento...")
+
+# Definir parámetros de entrenamiento
+training_config = {
+   'epochs': 100,
+   'batch_size': 128,
+   'validation_data': (X_val_reshaped, y_val_norm),
+   'callbacks': callbacks,
+   'verbose': 1,
+   'shuffle': True
+}
+
+print("   📋 Parámetros de entrenamiento:")
+print(f"      🎯 Épocas máximas: {training_config['epochs']}")
+print(f"      🎯 Batch size: {training_config['batch_size']}")
+print(f"      🎯 Datos de validación: {X_val_reshaped.shape[0]:,} muestras")
+print(f"      🎯 Shuffle: {training_config['shuffle']}")
+
+# Calcular steps por época
+steps_per_epoch = len(X_train_reshaped) // training_config['batch_size']
+validation_steps = len(X_val_reshaped) // training_config['batch_size']
+
+print(f"      📊 Steps por época: {steps_per_epoch}")
+print(f"      📊 Validation steps: {validation_steps}")
+
+# =====================================================================================
+# BLOQUE 8: ANÁLISIS DE MEMORIA Y RECURSOS
+# =====================================================================================
+print("\n💾 Análisis de recursos computacionales...")
+
+# Estimar memoria requerida para entrenamiento
+batch_memory_mb = (training_config['batch_size'] * 40 * 4) / (1024**2)  # Entrada
+batch_memory_mb += (training_config['batch_size'] * 96 * 4) / (1024**2)  # Salida
+gradients_memory_mb = model_size_mb * 2  # Aproximación para gradientes
+
+total_memory_estimate = model_size_mb + batch_memory_mb + gradients_memory_mb
+
+print(f"   📊 Estimación de memoria:")
+print(f"      🎯 Modelo: {model_size_mb:.2f} MB")
+print(f"      🎯 Batch (entrada+salida): {batch_memory_mb:.2f} MB")
+print(f"      🎯 Gradientes (aprox.): {gradients_memory_mb:.2f} MB")
+print(f"      🎯 Total estimado: {total_memory_estimate:.2f} MB")
+
+# Verificar disponibilidad de GPU
+gpu_available = len(tf.config.list_physical_devices('GPU')) > 0
+print(f"   🖥️  GPU disponible: {'✅ SÍ' if gpu_available else '❌ NO (usando CPU)'}")
+
+if gpu_available:
+   gpu_devices = tf.config.list_physical_devices('GPU')
+   print(f"      📱 Dispositivos GPU: {len(gpu_devices)}")
+   for i, gpu in enumerate(gpu_devices):
+       print(f"         GPU {i}: {gpu.name}")
+
+# =====================================================================================
+# BLOQUE 9: RESUMEN FINAL Y VERIFICACIÓN
+# =====================================================================================
+print("\n🔍 VERIFICACIÓN FINAL DEL MODELO:")
+print("-" * 60)
+
+# Lista de verificaciones
+checks = [
+   ("Arquitectura construida", model is not None),
+   ("Modelo compilado", model.optimizer is not None),
+   ("Callbacks configurados", len(callbacks) == 3),
+   ("Compatibilidad de datos", test_prediction.shape == (5, 96)),
+   ("Input shape correcto", model.input_shape == (None, 40, 1)),
+   ("Output shape correcto", model.output_shape == (None, 96)),
+]
+
+all_checks_passed = True
+for check_name, check_result in checks:
+   status = "✅ PASS" if check_result else "❌ FAIL"
+   print(f"   {status} {check_name}")
+   if not check_result:
+       all_checks_passed = False
+
+print(f"\n   🎯 Estado general: {'✅ TODOS LOS CHECKS PASARON' if all_checks_passed else '❌ REVISAR ERRORES'}")
+
+# =====================================================================================
+# RESUMEN FINAL
+# =====================================================================================
+print(f"\n📋 RESUMEN DE LA ARQUITECTURA CNN:")
+print(f"   🏗️  Modelo: Xu et al. (2022) Virtual Channel CNN")
+print(f"   📐 Input: (batch_size, 40, 1) - 8 electrodos")
+print(f"   📐 Output: (batch_size, 96) - 16 electrodos virtuales")
+print(f"   🎯 Parámetros: {total_params:,} entrenables")
+print(f"   🔧 Optimizador: RMSprop (lr=0.01)")
+print(f"   📊 Función de pérdida: MSE")
+print(f"   ⚙️  Callbacks: ReduceLR + EarlyStopping + ModelCheckpoint")
+
+print(f"\n🚀 VARIABLES LISTAS PARA ENTRENAMIENTO:")
+print(f"   • model: Modelo CNN compilado")
+print(f"   • callbacks: Lista de callbacks configurados")
+print(f"   • training_config: Diccionario con parámetros")
+
+# =====================================================================================
+# MENSAJE DE FINALIZACIÓN
+# =====================================================================================
+print("\n" + "=" * 80)
+print("✅ FASE 3 COMPLETADA - Modelo CNN construido, compilado y listo para entrenamiento")
+print("🚀 Siguiente paso: Entrenamiento del modelo con datos preparados")
+print("=" * 80)
+# =====================================================================================
+# SECCIÓN 4: ENTRENAMIENTO DEL MODELO Y ANÁLISIS DE RESULTADOS
+# Ejecución del entrenamiento CNN para mapeo 8e → 16e
+# =====================================================================================
+
+print("🚀 INICIANDO FASE 4: ENTRENAMIENTO DEL MODELO CNN")
+print("=" * 80)
+
+# Importar librerías adicionales necesarias
+import joblib
+from datetime import datetime
+
+# =====================================================================================
+# BLOQUE 1: PREPARACIÓN E INICIO DEL ENTRENAMIENTO
+# =====================================================================================
+print("\n🏁 PREPARANDO INICIO DEL ENTRENAMIENTO...")
+
+# Información previa al entrenamiento
+print(f"   📊 Datos de entrenamiento: {X_train_reshaped.shape[0]:,} muestras")
+print(f"   📊 Datos de validación: {X_val_reshaped.shape[0]:,} muestras")
+print(f"   📊 Batch size: {training_config['batch_size']}")
+print(f"   📊 Épocas máximas: {training_config['epochs']}")
+print(f"   🧠 Parámetros entrenables: {model.count_params():,}")
+
+# Calcular tiempo estimado
+samples_per_second_estimate = 1000  # Estimación conservadora
+total_samples_per_epoch = X_train_reshaped.shape[0]
+estimated_time_per_epoch = total_samples_per_epoch / samples_per_second_estimate
+estimated_total_time = estimated_time_per_epoch * training_config['epochs']
+
+print(f"   ⏱️  Tiempo estimado por época: ~{estimated_time_per_epoch:.1f} segundos")
+print(f"   ⏱️  Tiempo total estimado: ~{estimated_total_time/60:.1f} minutos")
+
+# Timestamp de inicio
+training_start_time = datetime.now()
+print(f"   🕐 Hora de inicio: {training_start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+
+print("\n" + "🔥" * 80)
+print("🔥" + " " * 25 + "INICIANDO ENTRENAMIENTO CNN" + " " * 25 + "🔥")
+print("🔥" * 80)
+
+# =====================================================================================
+# BLOQUE 2: EJECUCIÓN DEL ENTRENAMIENTO
+# =====================================================================================
+
+# Medir tiempo de entrenamiento
+training_timer_start = time.time()
+
+# Ejecutar entrenamiento
+try:
+   history = model.fit(
+       X_train_reshaped,
+       y_train_norm,
+       epochs=training_config['epochs'],
+       batch_size=training_config['batch_size'],
+       validation_data=training_config['validation_data'],
+       callbacks=training_config['callbacks'],
+       verbose=training_config['verbose'],
+       shuffle=training_config['shuffle']
+   )
+   
+   training_successful = True
+   
+except Exception as e:
+   print(f"\n❌ ERROR durante el entrenamiento: {e}")
+   training_successful = False
+   raise
+
+finally:
+   # Calcular tiempo total de entrenamiento
+   training_time = time.time() - training_timer_start
+   training_end_time = datetime.now()
+
+# =====================================================================================
+# BLOQUE 3: CONFIRMACIÓN POST-ENTRENAMIENTO
+# =====================================================================================
+
+if training_successful:
+   print("\n" + "✅" * 80)
+   print("✅" + " " * 25 + "ENTRENAMIENTO COMPLETADO" + " " * 26 + "✅")
+   print("✅" * 80)
+   
+   print(f"\n🏁 RESUMEN DE ENTRENAMIENTO:")
+   print(f"   ⏱️  Tiempo total: {training_time/60:.2f} minutos ({training_time:.0f} segundos)")
+   print(f"   🕐 Inicio: {training_start_time.strftime('%H:%M:%S')}")
+   print(f"   🕐 Fin: {training_end_time.strftime('%H:%M:%S')}")
+   
+   # Calcular velocidad real
+   total_samples_processed = len(history.history['loss']) * X_train_reshaped.shape[0]
+   samples_per_second_actual = total_samples_processed / training_time
+   print(f"   ⚡ Velocidad real: {samples_per_second_actual:.0f} muestras/segundo")
+
+# =====================================================================================
+# BLOQUE 4: ANÁLISIS POST-ENTRENAMIENTO
+# =====================================================================================
+print("\n📊 ANÁLISIS DETALLADO DE RESULTADOS:")
+print("-" * 60)
+
+# --- Extracción Robusta de Métricas ---
+train_mae = history.history['loss']
+val_mae = history.history['val_loss']
+train_mse = history.history['mean_squared_error']
+val_mse = history.history['val_mean_squared_error']
+
+# --- Análisis Básico ---
+epochs_completed = len(train_mae) # Usar una métrica que sabemos que existe
+best_epoch = np.argmin(val_mae) + 1
+best_val_mae = np.min(val_mae)
+best_val_mse = val_mse[best_epoch - 1]
+
+print(f"\n📈 MÉTRICAS GENERALES:")
+print(f"   🎯 Épocas ejecutadas: {epochs_completed}/{training_config['epochs']}")
+print(f"   🏆 Mejor época (basada en val_MAE): {best_epoch}")
+print(f"   📉 Mejor val_MAE (Loss): {best_val_mae:.6f}")
+print(f"   📉 MSE correspondiente: {best_val_mse:.6f}")
+
+# --- Análisis de la Última Época ---
+final_train_mae = train_mae[-1]
+final_val_mae = val_mae[-1]
+final_train_mse = train_mse[-1]
+final_val_mse = val_mse[-1]
+
+print(f"\n📊 MÉTRICAS FINALES (Época {epochs_completed}):")
+print(f"   🎯 Train MAE (Loss): {final_train_mae:.6f}")
+print(f"   🎯 Val MAE (Loss): {final_val_mae:.6f}")
+print(f"   🎯 Train MSE: {final_train_mse:.6f}")
+print(f"   🎯 Val MSE: {final_val_mse:.6f}")
+
+# --- Análisis de Overfitting (basado en MAE) ---
+overfitting_ratio = final_val_mae / final_train_mae
+print(f"\n🔍 ANÁLISIS DE OVERFITTING:")
+print(f"   📊 Ratio val_MAE/train_MAE: {overfitting_ratio:.3f}")
+# ... (el resto del código de clasificación de overfitting sigue igual)
+
+# --- Mejora del Modelo (basado en MAE) ---
+initial_val_mae = val_mae[0]
+improvement = ((initial_val_mae - best_val_mae) / initial_val_mae) * 100
+print(f"\n📈 MEJORA DEL MODELO:")
+print(f"   📊 Val_MAE inicial: {initial_val_mae:.6f}")
+print(f"   📊 Val_MAE final: {best_val_mae:.6f}")
+print(f"   📊 Mejora total: {improvement:.2f}%")
+
+# =====================================================================================
+# BLOQUE 5: FUNCIÓN DE VISUALIZACIÓN DE CURVAS DE APRENDIZAJE
+# =====================================================================================
+
+def plot_training_history(history, figsize=(16, 6)):
+    """
+    Visualiza las curvas de aprendizaje del entrenamiento.
+    Adaptada para cuando 'loss' es MAE y 'mean_squared_error' es una métrica.
+    """
+   
+    # Obtener datos del historial con los nombres de clave correctos
+    epochs_range = range(1, len(history.history['loss']) + 1)
+    
+    # 'loss' es MAE
+    train_mae = history.history['loss']
+    val_mae = history.history['val_loss']
+    
+    # 'mean_squared_error' es la métrica adicional
+    train_mse = history.history['mean_squared_error']
+    val_mse = history.history['val_mean_squared_error']
+    
+    # Encontrar la mejor época basado en 'val_loss' (que es val_mae)
+    best_epoch = np.argmin(val_mae) + 1
+    
+    # Crear figura con subplots
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=figsize)
+    
+    # --- Subplot 1: Pérdida (MSE) con escala logarítmica ---
+    ax1.semilogy(epochs_range, train_mse, 'b-', linewidth=2, label='Train MSE', alpha=0.8)
+    ax1.semilogy(epochs_range, val_mse, 'r-', linewidth=2, label='Validation MSE', alpha=0.8)
+    ax1.axvline(x=best_epoch, color='green', linestyle='--', linewidth=2, 
+                label=f'Best Epoch ({best_epoch})', alpha=0.7)
+    ax1.set_title('Curva de Pérdida (MSE)', fontweight='bold', fontsize=14)
+    ax1.set_xlabel('Época')
+    ax1.set_ylabel('Mean Squared Error (log scale)')
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+    
+    # Anotar el mejor valor de MSE
+    best_val_mse = val_mse[best_epoch - 1]
+    ax1.annotate(f'Best MSE: {best_val_mse:.6f}', 
+                xy=(best_epoch, best_val_mse),
+                xytext=(best_epoch, best_val_mse * 1.5), # Ajustar posición del texto
+                arrowprops=dict(arrowstyle='->', color='green', alpha=0.7),
+                fontsize=10, color='green', fontweight='bold')
+    
+    # --- Subplot 2: Métrica (MAE) ---
+    ax2.plot(epochs_range, train_mae, 'b-', linewidth=2, label='Train MAE (Loss)', alpha=0.8)
+    ax2.plot(epochs_range, val_mae, 'r-', linewidth=2, label='Validation MAE (Loss)', alpha=0.8)
+    ax2.axvline(x=best_epoch, color='green', linestyle='--', linewidth=2, 
+                label=f'Best Epoch ({best_epoch})', alpha=0.7)
+    ax2.set_title('Curva de Pérdida (MAE)', fontweight='bold', fontsize=14)
+    ax2.set_xlabel('Época')
+    ax2.set_ylabel('Mean Absolute Error')
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+    
+    # Anotar el mejor valor de MAE
+    best_val_mae = val_mae[best_epoch - 1]
+    ax2.annotate(f'Best MAE: {best_val_mae:.6f}', 
+                xy=(best_epoch, best_val_mae),
+                xytext=(best_epoch, best_val_mae * 1.05), # Ajustar posición del texto
+                arrowprops=dict(arrowstyle='->', color='green', alpha=0.7),
+                fontsize=10, color='green', fontweight='bold')
+    
+    plt.tight_layout()
+    plt.show()
+   
+    # --- Estadísticas adicionales en texto (CORREGIDAS) ---
+    # La pérdida de validación que usamos para 'EarlyStopping' es MAE
+    best_val_loss_metric = min(val_mae) 
+    
+    print(f"\n📊 ESTADÍSTICAS DE LAS CURVAS:")
+    print(f"   📈 Épocas totales: {len(epochs_range)}")
+    print(f"   🏆 Mejor época (basado en val_loss/MAE): {best_epoch}")
+    print(f"   📉 Mejor val_loss (MAE): {best_val_loss_metric:.6f}")
+    print(f"   📉 MSE correspondiente en la mejor época: {best_val_mse:.6f}")
+    
+    # Análisis de convergencia
+    if len(epochs_range) >= 10:
+        last_10_epochs_mae = val_mae[-10:]
+        convergence_std = np.std(last_10_epochs_mae)
+        print(f"   📊 Estabilidad (últimas 10 épocas, MAE): std = {convergence_std:.8f}")
+        
+        if convergence_std < 0.0001:
+            print("   ✅ Modelo excelentemente convergido")
+        elif convergence_std < 0.001:
+            print("   ✅ Modelo bien convergido")
+        else:
+            print("   ⚠️ Convergencia moderada")
+
+# =====================================================================================
+# BLOQUE 6: VISUALIZACIÓN DE CURVAS DE APRENDIZAJE
+# =====================================================================================
+print("\n📊 GENERANDO VISUALIZACIÓN DE CURVAS DE APRENDIZAJE...")
+
+plot_training_history(history)
+
+# =====================================================================================
+# BLOQUE 7: ANÁLISIS ADICIONAL DE CALLBACKS
+# =====================================================================================
+print("\n🔧 ANÁLISIS DE CALLBACKS:")
+print("-" * 40)
+
+# Verificar si EarlyStopping se activó
+if epochs_completed < training_config['epochs']:
+   print(f"   ⏹️  EarlyStopping activado en época {epochs_completed}")
+   patience_triggered = training_config['epochs'] - epochs_completed
+   print(f"   ⏱️  Se detuvo {patience_triggered} épocas antes del límite")
+else:
+   print(f"   🔄 Se completaron todas las {training_config['epochs']} épocas")
+
+# Verificar si se guardó el mejor modelo
+import os
+if os.path.exists('modelo_cnn_best.keras'):
+   model_size = os.path.getsize('modelo_cnn_best.keras') / (1024**2)
+   print(f"   💾 Mejor modelo guardado: modelo_cnn_best.keras ({model_size:.2f} MB)")
+else:
+   print(f"   ❌ No se encontró el archivo del mejor modelo")
+
+# =====================================================================================
+# BLOQUE 8: GUARDADO FINAL DE ARTEFACTOS
+# =====================================================================================
+print("\n💾 GUARDANDO ARTEFACTOS FINALES...")
+
+# Guardado de scalers usando joblib
+try:
+   scalers_dict = {
+       'scaler_X': scaler_X,
+       'scaler_y': scaler_y,
+       'training_info': {
+           'input_shape': (40, 1),
+           'output_shape': 96,
+           'training_samples': X_train_reshaped.shape[0],
+           'validation_samples': X_val_reshaped.shape[0],
+           'best_epoch': best_epoch,
+           'best_val_loss': best_val_mae,
+           'training_time': training_time,
+           'training_date': training_start_time.strftime('%Y-%m-%d %H:%M:%S')
+       }
+   }
+   
+   joblib.dump(scalers_dict, os.path.join(output_dir, 'scalers.pkl'))
+   scalers_size = os.path.getsize('scalers.pkl') / 1024
+   print(f"   ✅ Scalers guardados: scalers.pkl ({scalers_size:.2f} KB)")
+   
+except Exception as e:
+   print(f"   ❌ Error guardando scalers: {e}")
+
+# Guardado del modelo final (estado después de todas las épocas)
+try:
+   model.save('modelo_cnn_final.keras')
+   final_model_size = os.path.getsize('modelo_cnn_final.keras') / (1024**2)
+   print(f"   ✅ Modelo final guardado: modelo_cnn_final.keras ({final_model_size:.2f} MB)")
+   
+except Exception as e:
+   print(f"   ❌ Error guardando modelo final: {e}")
+
+# Guardado del historial de entrenamiento
+try:
+   history_dict = {
+       'history': history.history,
+       'epochs_completed': epochs_completed,
+       'best_epoch': best_epoch,
+       'training_time': training_time,
+       'model_params': model.count_params()
+   }
+   
+   joblib.dump(history_dict, 'training_history.pkl')
+   history_size = os.path.getsize('training_history.pkl') / 1024
+   print(f"   ✅ Historial guardado: training_history.pkl ({history_size:.2f} KB)")
+   
+except Exception as e:
+   print(f"   ❌ Error guardando historial: {e}")
+
+# =====================================================================================
+# BLOQUE 9: RESUMEN FINAL COMPLETO
+# =====================================================================================
+print("\n📋 RESUMEN FINAL DEL ENTRENAMIENTO:")
+print("=" * 70)
+
+print(f"\n🎯 MÉTRICAS PRINCIPALES:")
+print(f"   📊 Mejor val_MAE (Loss): {best_val_mae:.6f}") # Usar la variable y el nombre correctos
+print(f"   📊 Mejor val_MAE: {best_val_mae:.6f}")
+print(f"   📊 Época óptima: {best_epoch}/{epochs_completed}")
+print(f"   📊 Mejora total: {improvement:.2f}%")
+print(f"   📊 Overfitting ratio: {overfitting_ratio:.3f}")
+
+print(f"\n⏱️  TIEMPO Y EFICIENCIA:")
+print(f"   🕐 Duración: {training_time/60:.2f} minutos")
+print(f"   ⚡ Velocidad: {samples_per_second_actual:.0f} muestras/seg")
+print(f"   🎯 Eficiencia: {(samples_per_second_actual/samples_per_second_estimate)*100:.0f}% vs estimado")
+
+print(f"\n💾 ARTEFACTOS GENERADOS:")
+print(f"   📁 modelo_cnn_best.keras - Mejor modelo (callbacks)")
+print(f"   📁 modelo_cnn_final.keras - Estado final")
+print(f"   📁 scalers.pkl - Normalizadores + metadatos")
+print(f"   📁 training_history.pkl - Historial completo")
+
+print(f"\n🎓 ESTADO DEL MODELO:")
+status_emoji = "✅" if overfitting_ratio < 1.3 and improvement > 10 else "⚠️"
+print(f"   {status_emoji} Modelo {'listo para evaluación' if status_emoji == '✅' else 'requiere revisión'}")
+print(f"   🧠 Parámetros entrenados: {model.count_params():,}")
+print(f"   🎯 Arquitectura: 8e → CNN → 96e (Xu et al. 2022)")
+
+# =====================================================================================
+# MENSAJE DE FINALIZACIÓN
+# =====================================================================================
+print("\n" + "=" * 80)
+print("✅ FASE 4 COMPLETADA - Entrenamiento ejecutado y resultados analizados")
+print("🚀 Siguiente paso: Evaluación del modelo en conjunto de prueba")
+print("=" * 80)
+# =====================================================================================
+# SECCIÓN 5: EVALUACIÓN RIGUROSA DEL MODELO CNN
+# Evaluación final del modelo en conjunto de prueba independiente
+# =====================================================================================
+
+print("🧪 INICIANDO FASE 5: EVALUACIÓN RIGUROSA DEL MODELO")
+print("=" * 80)
+
+# Importar librerías adicionales para evaluación
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+import joblib
+from datetime import datetime
+
+# =====================================================================================
+# BLOQUE 1: CARGA DE ARTEFACTOS GUARDADOS
+# =====================================================================================
+print("\n📁 CARGANDO ARTEFACTOS DEL ENTRENAMIENTO...")
+
+# Cargar el mejor modelo guardado
+try:
+   print("   🧠 Cargando mejor modelo...")
+   best_model = keras.models.load_model('modelo_cnn_best.keras')
+   
+   # Verificar que el modelo se cargó correctamente
+   model_params = best_model.count_params()
+   print(f"   ✅ Mejor modelo cargado exitosamente")
+   print(f"      📊 Parámetros: {model_params:,}")
+   print(f"      📐 Input shape: {best_model.input_shape}")
+   print(f"      📐 Output shape: {best_model.output_shape}")
+   
+except Exception as e:
+   print(f"   ❌ ERROR cargando modelo: {e}")
+   raise
+
+# Cargar scalers y metadatos
+try:
+   print("   🎛️  Cargando scalers...")
+   scalers_data = joblib.load('scalers.pkl')
+   
+   scaler_X_loaded = scalers_data['scaler_X']
+   scaler_y_loaded = scalers_data['scaler_y']
+   training_info = scalers_data['training_info']
+   
+   print(f"   ✅ Scalers cargados exitosamente")
+   print(f"      📊 Entrenado con: {training_info['training_samples']:,} muestras")
+   print(f"      🏆 Mejor época: {training_info['best_epoch']}")
+   print(f"      📉 Mejor val_loss: {training_info['best_val_loss']:.6f}")
+   print(f"      📅 Fecha entrenamiento: {training_info['training_date']}")
+   
+except Exception as e:
+   print(f"   ❌ ERROR cargando scalers: {e}")
+   raise
+
+# =====================================================================================
+# BLOQUE 2: PREDICCIÓN EN CONJUNTO DE PRUEBA
+# =====================================================================================
+print("\n🔮 REALIZANDO PREDICCIONES EN CONJUNTO DE PRUEBA...")
+
+print(f"   📊 Conjunto de prueba: {X_test_reshaped.shape[0]:,} muestras")
+print(f"   📐 Input shape: {X_test_reshaped.shape}")
+
+# Medir tiempo de inferencia
+inference_start = time.time()
+
+# Realizar predicciones
+try:
+   print("   🧠 Ejecutando inferencia...")
+   y_pred_norm = best_model.predict(X_test_reshaped, verbose=0)
+   
+   inference_time = time.time() - inference_start
+   
+   print(f"   ✅ Predicciones completadas")
+   print(f"   ⏱️  Tiempo de inferencia: {inference_time:.3f} segundos")
+   print(f"   📐 Predicciones shape: {y_pred_norm.shape}")
+   
+   # Calcular velocidad de inferencia
+   samples_per_second = X_test_reshaped.shape[0] / inference_time
+   print(f"   ⚡ Velocidad inferencia: {samples_per_second:.0f} muestras/segundo")
+   
+except Exception as e:
+   print(f"   ❌ ERROR en predicción: {e}")
+   raise
+
+# =====================================================================================
+# BLOQUE 3: DESNORMALIZACIÓN (PASO CRÍTICO)
+# =====================================================================================
+print("\n🔄 DESNORMALIZANDO DATOS A ESCALA FÍSICA ORIGINAL...")
+
+try:
+   # Desnormalizar predicciones
+   print("   📤 Desnormalizando predicciones...")
+   y_pred_original = scaler_y_loaded.inverse_transform(y_pred_norm)
+   
+   # Desnormalizar valores reales
+   print("   📥 Desnormalizando valores reales...")
+   y_test_original = scaler_y_loaded.inverse_transform(y_test_norm)
+   
+   print(f"   ✅ Desnormalización completada")
+   print(f"   📊 y_pred_original shape: {y_pred_original.shape}")
+   print(f"   📊 y_test_original shape: {y_test_original.shape}")
+   
+   # Verificar rangos de datos desnormalizados
+   print(f"\n   📈 Rangos desnormalizados:")
+   print(f"      🎯 Predicciones: [{np.min(y_pred_original):.6e}, {np.max(y_pred_original):.6e}]")
+   print(f"      🎯 Valores reales: [{np.min(y_test_original):.6e}, {np.max(y_test_original):.6e}]")
+   
+except Exception as e:
+   print(f"   ❌ ERROR en desnormalización: {e}")
+   raise
+
+# =====================================================================================
+# BLOQUE 4: CÁLCULO DE MÉTRICAS FINALES
+# =====================================================================================
+print("\n📊 CALCULANDO MÉTRICAS DE RENDIMIENTO FINAL...")
+
+# Calcular métricas principales
+mse_final = mean_squared_error(y_test_original, y_pred_original)
+mae_final = mean_absolute_error(y_test_original, y_pred_original)
+r2_final = r2_score(y_test_original, y_pred_original)
+
+# Calcular RMSE
+rmse_final = np.sqrt(mse_final)
+
+# Calcular errores relativos
+mean_true = np.mean(np.abs(y_test_original))
+relative_mae = (mae_final / mean_true) * 100
+relative_rmse = (rmse_final / mean_true) * 100
+
+print(f"\n🎯 MÉTRICAS PRINCIPALES:")
+print(f"   📊 MSE (Error Cuadrático Medio): {mse_final:.8e}")
+print(f"   📊 RMSE (Raíz del Error Cuadrático): {rmse_final:.8e}")
+print(f"   📊 MAE (Error Absoluto Medio): {mae_final:.8e}")
+print(f"   📊 R² (Coeficiente de Determinación): {r2_final:.6f}")
+
+print(f"\n📈 MÉTRICAS RELATIVAS:")
+print(f"   📊 MAE Relativo: {relative_mae:.3f}%")
+print(f"   📊 RMSE Relativo: {relative_rmse:.3f}%")
+
+# Comparación con paper original (R² ≈ 0.95)
+paper_r2 = 0.95
+r2_difference = r2_final - paper_r2
+r2_percentage = (r2_final / paper_r2) * 100
+
+print(f"\n📖 COMPARACIÓN CON PAPER XU ET AL. (2022):")
+print(f"   📊 R² Paper: {paper_r2:.3f}")
+print(f"   📊 R² Nuestro: {r2_final:.6f}")
+print(f"   📊 Diferencia: {r2_difference:+.6f}")
+print(f"   📊 Porcentaje: {r2_percentage:.2f}% del paper")
+
+# =====================================================================================
+# BLOQUE 5: ANÁLISIS DE DISTRIBUCIÓN DE ERRORES
+# =====================================================================================
+print("\n📈 ANÁLISIS DE DISTRIBUCIÓN DE ERRORES...")
+
+# Calcular errores por muestra
+errors_absolute = np.abs(y_test_original - y_pred_original)
+errors_squared = (y_test_original - y_pred_original) ** 2
+
+# Calcular MAE por muestra (promedio de los 96 canales por muestra)
+mae_per_sample = np.mean(errors_absolute, axis=1)
+mse_per_sample = np.mean(errors_squared, axis=1)
+
+# Calcular percentiles de error
+percentiles = [50, 75, 90, 95, 99]
+error_percentiles = np.percentile(mae_per_sample, percentiles)
+
+print(f"\n📊 ESTADÍSTICAS DE ERROR POR MUESTRA:")
+print(f"   📈 Error medio por muestra: {np.mean(mae_per_sample):.8e}")
+print(f"   📈 Desviación estándar: {np.std(mae_per_sample):.8e}")
+print(f"   📈 Error mínimo: {np.min(mae_per_sample):.8e}")
+print(f"   📈 Error máximo: {np.max(mae_per_sample):.8e}")
+
+print(f"\n📊 PERCENTILES DE ERROR (MAE por muestra):")
+for p, val in zip(percentiles, error_percentiles):
+   print(f"   📊 P{p}: {val:.8e}")
+
+# Crear histograma de distribución de errores
+plt.figure(figsize=(15, 5))
+
+# Subplot 1: Histograma de MAE por muestra
+plt.subplot(1, 3, 1)
+plt.hist(mae_per_sample, bins=50, alpha=0.7, color='skyblue', edgecolor='black')
+plt.axvline(np.mean(mae_per_sample), color='red', linestyle='--', 
+          label=f'Media: {np.mean(mae_per_sample):.2e}')
+plt.axvline(np.median(mae_per_sample), color='green', linestyle='--', 
+          label=f'Mediana: {np.median(mae_per_sample):.2e}')
+plt.title('Distribución de MAE por Muestra', fontweight='bold')
+plt.xlabel('MAE por Muestra')
+plt.ylabel('Frecuencia')
+plt.legend()
+plt.grid(True, alpha=0.3)
+
+# Subplot 2: Box plot de errores por muestra
+plt.subplot(1, 3, 2)
+plt.boxplot(mae_per_sample, vert=True)
+plt.title('Box Plot - MAE por Muestra', fontweight='bold')
+plt.ylabel('MAE por Muestra')
+plt.grid(True, alpha=0.3)
+
+# Subplot 3: Q-Q plot para normalidad
+from scipy import stats
+plt.subplot(1, 3, 3)
+stats.probplot(mae_per_sample, dist="norm", plot=plt)
+plt.title('Q-Q Plot - Normalidad de Errores', fontweight='bold')
+plt.grid(True, alpha=0.3)
+
+plt.tight_layout()
+plt.show()
+
+# =====================================================================================
+# BLOQUE 6: VISUALIZACIÓN COMPARATIVA DE EJEMPLOS
+# =====================================================================================
+print("\n📊 GENERANDO VISUALIZACIÓN COMPARATIVA DE EJEMPLOS...")
+
+# Seleccionar muestras aleatorias para visualización
+np.random.seed(RANDOM_SEED)
+n_examples = 6
+sample_indices = np.random.choice(len(y_test_original), n_examples, replace=False)
+
+print(f"   🎲 Muestras seleccionadas: {sample_indices}")
+
+# Crear figura con subplots
+fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+axes = axes.ravel()
+
+for i, idx in enumerate(sample_indices):
+   ax = axes[i]
+   
+   # Obtener datos de la muestra
+   y_true_sample = y_test_original[idx]
+   y_pred_sample = y_pred_original[idx]
+   
+   # Calcular métricas para esta muestra específica
+   mae_sample = mean_absolute_error(y_true_sample, y_pred_sample)
+   r2_sample = r2_score(y_true_sample, y_pred_sample)
+   
+   # Crear rango de canales (1-96)
+   channels = np.arange(1, 97)
+   
+   # Graficar valores reales y predichos
+   ax.plot(channels, y_true_sample, 'b-', linewidth=2, label='Real (16e)', alpha=0.8)
+   ax.plot(channels, y_pred_sample, 'r--', linewidth=2, label='Predicho (CNN)', alpha=0.8)
+   
+   # Rellenar área entre curvas para mostrar error
+   ax.fill_between(channels, y_true_sample, y_pred_sample, 
+                  alpha=0.3, color='gray', label='Error')
+   
+   # Configurar subplot
+   ax.set_title(f'Muestra #{idx}\nMAE: {mae_sample:.2e}, R²: {r2_sample:.4f}', 
+               fontweight='bold', fontsize=11)
+   ax.set_xlabel('Canal de Medición (16e)')
+   ax.set_ylabel('Voltaje (V)')
+   ax.legend(fontsize=9)
+   ax.grid(True, alpha=0.3)
+   ax.ticklabel_format(style='scientific', axis='y', scilimits=(0,0))
+
+plt.suptitle('Comparación Real vs Predicho - Ejemplos del Conjunto de Prueba', 
+            fontsize=16, fontweight='bold', y=0.98)
+plt.tight_layout()
+plt.subplots_adjust(top=0.92)
+plt.show()
+
+# Mostrar estadísticas de los ejemplos visualizados
+print(f"\n📊 ESTADÍSTICAS DE EJEMPLOS VISUALIZADOS:")
+for i, idx in enumerate(sample_indices):
+   y_true_sample = y_test_original[idx]
+   y_pred_sample = y_pred_original[idx]
+   mae_sample = mean_absolute_error(y_true_sample, y_pred_sample)
+   r2_sample = r2_score(y_true_sample, y_pred_sample)
+   print(f"   🎯 Muestra #{idx}: MAE={mae_sample:.2e}, R²={r2_sample:.4f}")
+
+# =====================================================================================
+# BLOQUE 7: ANÁLISIS DE CANALES INDIVIDUALES
+# =====================================================================================
+print("\n🔍 ANÁLISIS POR CANAL INDIVIDUAL...")
+
+# Calcular MAE por canal (promedio sobre todas las muestras)
+mae_per_channel = np.mean(np.abs(y_test_original - y_pred_original), axis=0)
+r2_per_channel = []
+
+for channel in range(96):
+   r2_ch = r2_score(y_test_original[:, channel], y_pred_original[:, channel])
+   r2_per_channel.append(r2_ch)
+
+r2_per_channel = np.array(r2_per_channel)
+
+# Encontrar mejores y peores canales
+best_channels_mae = np.argsort(mae_per_channel)[:5]  # 5 mejores (menor MAE)
+worst_channels_mae = np.argsort(mae_per_channel)[-5:]  # 5 peores (mayor MAE)
+
+best_channels_r2 = np.argsort(r2_per_channel)[-5:]  # 5 mejores (mayor R²)
+worst_channels_r2 = np.argsort(r2_per_channel)[:5]  # 5 peores (menor R²)
+
+print(f"\n📊 ANÁLISIS POR CANAL:")
+print(f"   📈 MAE promedio por canal: {np.mean(mae_per_channel):.2e}")
+print(f"   📈 R² promedio por canal: {np.mean(r2_per_channel):.4f}")
+
+print(f"\n🏆 MEJORES CANALES (MAE):")
+for ch in best_channels_mae:
+   print(f"   Canal {ch+1:2d}: MAE={mae_per_channel[ch]:.2e}, R²={r2_per_channel[ch]:.4f}")
+
+print(f"\n⚠️ CANALES CON MAYOR ERROR (MAE):")
+for ch in worst_channels_mae:
+   print(f"   Canal {ch+1:2d}: MAE={mae_per_channel[ch]:.2e}, R²={r2_per_channel[ch]:.4f}")
+
+# Visualizar rendimiento por canal
+plt.figure(figsize=(16, 6))
+
+plt.subplot(1, 2, 1)
+plt.plot(range(1, 97), mae_per_channel, 'b-', linewidth=1, alpha=0.7)
+plt.scatter(best_channels_mae + 1, mae_per_channel[best_channels_mae], 
+          color='green', s=50, label='5 Mejores', zorder=5)
+plt.scatter(worst_channels_mae + 1, mae_per_channel[worst_channels_mae], 
+          color='red', s=50, label='5 Peores', zorder=5)
+plt.title('MAE por Canal de Medición', fontweight='bold')
+plt.xlabel('Canal (1-96)')
+plt.ylabel('MAE')
+plt.legend()
+plt.grid(True, alpha=0.3)
+
+plt.subplot(1, 2, 2)
+plt.plot(range(1, 97), r2_per_channel, 'r-', linewidth=1, alpha=0.7)
+plt.scatter(best_channels_r2 + 1, r2_per_channel[best_channels_r2], 
+          color='green', s=50, label='5 Mejores', zorder=5)
+plt.scatter(worst_channels_r2 + 1, r2_per_channel[worst_channels_r2], 
+          color='red', s=50, label='5 Peores', zorder=5)
+plt.title('R² por Canal de Medición', fontweight='bold')
+plt.xlabel('Canal (1-96)')
+plt.ylabel('R²')
+plt.legend()
+plt.grid(True, alpha=0.3)
+
+plt.tight_layout()
+plt.show()
+
+# =====================================================================================
+# BLOQUE 8: CONCLUSIÓN Y EVALUACIÓN DE LA REPLICACIÓN
+# =====================================================================================
+print("\n📋 EVALUACIÓN FINAL DE LA REPLICACIÓN:")
+print("=" * 70)
+
+# Criterios de evaluación
+evaluation_criteria = {
+   'Excelente': {'r2_min': 0.95, 'mae_max': 5e-5},
+   'Muy Bueno': {'r2_min': 0.90, 'mae_max': 1e-4},
+   'Bueno': {'r2_min': 0.85, 'mae_max': 2e-4},
+   'Aceptable': {'r2_min': 0.80, 'mae_max': 5e-4},
+   'Insuficiente': {'r2_min': 0.0, 'mae_max': float('inf')}
+}
+
+# Determinar clasificación
+classification = 'Insuficiente'
+for level, criteria in evaluation_criteria.items():
+   if r2_final >= criteria['r2_min'] and mae_final <= criteria['mae_max']:
+       classification = level
+       break
+
+# Determinar estado de la replicación
+if r2_final >= 0.93:  # Dentro del 2% del paper
+   replication_status = "🏆 REPLICACIÓN EXITOSA"
+   status_color = "✅"
+elif r2_final >= 0.90:  # Dentro del 5% del paper
+   replication_status = "🎯 REPLICACIÓN ACEPTABLE"
+   status_color = "✅"
+elif r2_final >= 0.85:  # Dentro del 10% del paper
+   replication_status = "⚠️ REPLICACIÓN PARCIAL"
+   status_color = "⚠️"
+else:
+   replication_status = "❌ REPLICACIÓN INSUFICIENTE"
+   status_color = "❌"
+
+print(f"\n{status_color} RESULTADO FINAL: {replication_status}")
+print(f"   📊 Clasificación: {classification}")
+print(f"   📊 R² obtenido: {r2_final:.6f}")
+print(f"   📊 R² objetivo (paper): {paper_r2:.3f}")
+print(f"   📊 Diferencia: {r2_difference:+.6f} ({((r2_difference/paper_r2)*100):+.2f}%)")
+
+print(f"\n📈 MÉTRICAS CLAVE:")
+print(f"   🎯 MSE: {mse_final:.8e}")
+print(f"   🎯 MAE: {mae_final:.8e}")
+print(f"   🎯 RMSE: {rmse_final:.8e}")
+print(f"   🎯 R²: {r2_final:.6f}")
+
+print(f"\n⏱️ RENDIMIENTO COMPUTACIONAL:")
+print(f"   🚀 Tiempo inferencia: {inference_time:.3f}s para {X_test_reshaped.shape[0]:,} muestras")
+print(f"   ⚡ Velocidad: {samples_per_second:.0f} muestras/segundo")
+
+print(f"\n🎓 CONCLUSIÓN CIENTÍFICA:")
+if classification in ['Excelente', 'Muy Bueno']:
+   conclusion = "El modelo CNN replicado exitosamente demuestra la viabilidad del mapeo 8e→16e usando metodología Xu et al."
+elif classification == 'Bueno':
+   conclusion = "El modelo muestra resultados prometedores con potencial de mejora mediante ajuste de hiperparámetros."
+elif classification == 'Aceptable':
+   conclusion = "El modelo logra un mapeo básico funcional, pero requiere optimización adicional."
+else:
+   conclusion = "El modelo requiere revisión fundamental de arquitectura y/o datos de entrenamiento."
+
+print(f"   📝 {conclusion}")
+
+# Guardar resultados de evaluación
+evaluation_results = {
+   'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+   'metrics': {
+       'mse': float(mse_final),
+       'mae': float(mae_final),
+       'rmse': float(rmse_final),
+       'r2': float(r2_final)
+   },
+   'comparison_paper': {
+       'paper_r2': paper_r2,
+       'difference': float(r2_difference),
+       'percentage': float(r2_percentage)
+   },
+   'classification': classification,
+   'replication_status': replication_status,
+   'performance': {
+       'inference_time': inference_time,
+       'samples_per_second': float(samples_per_second)
+   },
+   'test_samples': int(X_test_reshaped.shape[0])
+}
+
+try:
+   joblib.dump(evaluation_results, 'evaluation_results.pkl')
+   print(f"\n💾 Resultados guardados en: evaluation_results.pkl")
+except:
+   print(f"\n⚠️ No se pudieron guardar los resultados de evaluación")
+
+# =====================================================================================
+# MENSAJE DE FINALIZACIÓN
+# =====================================================================================
+print("\n" + "=" * 80)
+print("✅ FASE 5 COMPLETADA - Evaluación rigurosa del modelo finalizada")
+print("🎉 PROYECTO DE REPLICACIÓN XU ET AL. (2022) COMPLETADO")
+print("=" * 80)
+
+print(f"\n🏁 RESUMEN EJECUTIVO:")
+print(f"   📊 R² Final: {r2_final:.6f}")
+print(f"   🎯 Estado: {replication_status}")
+print(f"   📈 Clasificación: {classification}")
+print(f"   ⚡ Velocidad: {samples_per_second:.0f} muestras/s")
+
+print(f"\n🚀 MISIÓN CUMPLIDA: Dataset generado, modelo entrenado y evaluado exitosamente")
