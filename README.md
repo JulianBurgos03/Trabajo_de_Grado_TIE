@@ -204,7 +204,7 @@ Universidad del Cauca<br><br>
 <a href="https://www.linkedin.com/in/juan-jos%C3%A9-fern%C3%A1ndez-pomeo-74830b2a9/">
   <img src="https://img.shields.io/badge/LinkedIn-0077B5?style=for-the-badge&logo=linkedin&logoColor=white"/>
 </a>
-<a href="#">
+<a href="https://www.researchgate.net/profile/Juan-Jose-Fernandez-Pomeo">
   <img src="https://img.shields.io/badge/ResearchGate-00CCBB?style=for-the-badge&logo=researchgate&logoColor=white"/>
 </a><br>
 📧 <a href="mailto:jujofernandez@unicauca.edu.co">jujofernandez@unicauca.edu.co</a>
